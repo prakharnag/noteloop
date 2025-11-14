@@ -32,6 +32,7 @@ DROP POLICY IF EXISTS "Authenticated users can upload" ON storage.objects;
 DROP POLICY IF EXISTS "Authenticated users can read" ON storage.objects;
 DROP POLICY IF EXISTS "Users can update own files" ON storage.objects;
 DROP POLICY IF EXISTS "Users can delete own files" ON storage.objects;
+DROP POLICY IF EXISTS "Service role can read for processing" ON storage.objects;
 
 -- Allow authenticated users to upload files
 CREATE POLICY "Authenticated users can upload"

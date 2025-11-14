@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateEmbedding } from '@/lib/vectordb/embeddings';
 import { queryVectors } from '@/lib/vectordb/pinecone';
 import { getSupabaseClient } from '@/lib/db/supabase';
+import { getConversationMessages, addMessage, getOrCreateConversation } from '@/lib/db/conversations';
 import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const { user_id: userId, query, filters } = body;
+    const { user_id: userId, query, filters, conversation_id: conversationId } = body;
 
     // Validation
     if (!userId) {
@@ -45,6 +46,18 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(`[Query API] Processing query for user ${userId}: "${query}"`);
+
+    // Get or create conversation
+    let currentConversationId = conversationId;
+    if (!currentConversationId) {
+      const conversation = await getOrCreateConversation(userId);
+      currentConversationId = conversation.id;
+      console.log(`[Query API] Created/using conversation: ${currentConversationId}`);
+    }
+
+    // Get conversation history
+    const previousMessages = await getConversationMessages(currentConversationId);
+    console.log(`[Query API] Loaded ${previousMessages.length} previous messages`);
 
     // Step 1: Generate embedding for the query
     console.log('[Query API] Generating query embedding...');
@@ -113,8 +126,12 @@ export async function POST(request: NextRequest) {
 
     console.log(`[Query API] Found ${contextChunks.length} relevant chunks`);
 
-    // Step 6: Generate answer using LLM
-    console.log('[Query API] Generating answer with LLM...');
+    // Step 6: Save user message to database
+    console.log('[Query API] Saving user message...');
+    await addMessage(currentConversationId, 'user', query);
+
+    // Step 7: Generate answer using LLM with conversation history (STREAMING)
+    console.log('[Query API] Generating answer with LLM (streaming)...');
     const systemPrompt = `You are a helpful AI assistant that answers questions based on the user's personal knowledge base.
 
 Use the provided context to answer the question. If the context doesn't contain enough information to answer the question, say so honestly.
@@ -122,19 +139,13 @@ Use the provided context to answer the question. If the context doesn't contain 
 Context from knowledge base:
 ${context}`;
 
-    const completion = await getOpenAIClient().chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: query },
-      ],
-      temperature: 0.7,
-      max_tokens: 500,
-    });
+    // Build messages array with conversation history
+    const conversationHistory = previousMessages.map(msg => ({
+      role: msg.role as 'user' | 'assistant' | 'system',
+      content: msg.content,
+    }));
 
-    const answer = completion.choices[0].message.content || 'Unable to generate answer.';
-
-    // Step 7: Format sources
+    // Step 8: Format sources
     const sources = contextChunks.map((chunk) => ({
       document_id: chunk.metadata?.document_id as string,
       title: chunk.metadata?.title as string,
@@ -144,13 +155,76 @@ ${context}`;
       created_at: chunk.metadata?.created_at as string,
     }));
 
-    console.log('[Query API] Query completed successfully');
+    // Create streaming response
+    const stream = await getOpenAIClient().chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...conversationHistory,
+        { role: 'user', content: query },
+      ],
+      temperature: 0.7,
+      max_tokens: 500,
+      stream: true,
+    });
 
-    return NextResponse.json({
-      answer,
-      sources,
-      query,
-      chunks_used: contextChunks.length,
+    // Create a readable stream to send to client
+    let fullAnswer = '';
+
+    const encoder = new TextEncoder();
+    const readableStream = new ReadableStream({
+      async start(controller) {
+        try {
+          // Send initial metadata
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({
+              type: 'metadata',
+              conversation_id: currentConversationId,
+              chunks_used: contextChunks.length
+            })}\n\n`)
+          );
+
+          // Stream tokens
+          for await (const chunk of stream) {
+            const content = chunk.choices[0]?.delta?.content || '';
+            if (content) {
+              fullAnswer += content;
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ type: 'token', content })}\n\n`)
+              );
+            }
+          }
+
+          // Save complete answer to database
+          console.log('[Query API] Saving assistant response...');
+          await addMessage(currentConversationId, 'assistant', fullAnswer, sources);
+
+          // Send completion signal
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
+          );
+
+          controller.close();
+          console.log('[Query API] Streaming completed successfully');
+        } catch (error) {
+          console.error('[Query API] Streaming error:', error);
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({
+              type: 'error',
+              error: error instanceof Error ? error.message : 'Streaming error'
+            })}\n\n`)
+          );
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(readableStream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
     });
 
   } catch (error) {

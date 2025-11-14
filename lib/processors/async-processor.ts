@@ -56,13 +56,48 @@ export async function processDocumentAsync(
 
     // Step 3: Chunk the content
     console.log('[AsyncProcessor] Chunking content...');
+    console.log(`[AsyncProcessor] Content length: ${processedContent.text.length} characters`);
+
     const chunks = chunkText(processedContent.text, {
       maxTokens: 512,
       overlap: 50,
       preserveParagraphs: true,
     });
 
-    console.log(`[AsyncProcessor] Created ${chunks.length} chunks`);
+      if (chunks.length === 0) {
+        // Likely an image-only PDF or extractor produced no text.
+        // Instead of throwing and failing the background job, mark the document
+        // with a 'no_text' tag so it can be handled (OCR/manual review) later.
+        console.warn(
+          `[AsyncProcessor] No chunks created for document ${documentId} — possibly image-only PDF or empty content. Marking document with 'no_text' tag and skipping vectorization.`
+        );
+
+        try {
+          const supabaseForNoText = getSupabaseClient();
+          const { data: existingDoc, error: fetchErr } = await supabaseForNoText
+            .from('documents')
+            .select('*')
+            .eq('id', documentId)
+            .single();
+
+          const newTags = fetchErr || !existingDoc
+            ? ['no_text']
+            : [...(existingDoc.tags || []).filter((t: string) => t !== 'processing'), 'no_text'];
+
+          await supabaseForNoText
+            .from('documents')
+            .update({ tags: newTags })
+            .eq('id', documentId);
+        } catch (tagErr) {
+          console.error(
+            `[AsyncProcessor] Failed to update document ${documentId} tags for no_text fallback:`,
+            tagErr
+          );
+        }
+
+        // Stop further processing for this document
+        return;
+      }
 
     // Step 4: Generate embeddings
     console.log('[AsyncProcessor] Generating embeddings...');

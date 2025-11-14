@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { UploadSection } from '@/components/UploadSection';
 import { ChatInterface } from '@/components/ChatInterface';
+import { DocumentManager } from '@/components/DocumentManager';
 import { createClient } from '@/lib/auth/supabase-client';
 import { useRouter } from 'next/navigation';
 
@@ -70,7 +71,7 @@ export default function AppPage() {
         </header>
 
         {/* Main Interface */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
           {/* Upload Section */}
           <div className="lg:col-span-1">
             <UploadSection userId={userId} />
@@ -80,6 +81,11 @@ export default function AppPage() {
           <div className="lg:col-span-2">
             <ChatInterface userId={userId} />
           </div>
+        </div>
+
+        {/* Document Library */}
+        <div className="mt-6">
+          <DocumentManager userId={userId} />
         </div>
       </div>
     </div>

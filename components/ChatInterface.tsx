@@ -24,9 +24,11 @@ interface Source {
 }
 
 export function ChatInterface({ userId }: ChatInterfaceProps) {
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [conversationLoading, setConversationLoading] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -36,6 +38,41 @@ export function ChatInterface({ userId }: ChatInterfaceProps) {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Load conversation and messages on mount
+  useEffect(() => {
+    const loadConversation = async () => {
+      try {
+        console.log('[ChatInterface] Loading conversation for user:', userId);
+        const response = await fetch(`/api/conversations/latest?user_id=${userId}`);
+        const data = await response.json();
+
+        if (response.ok) {
+          setConversationId(data.conversation.id);
+
+          // Transform messages from database format to UI format
+          const loadedMessages: Message[] = data.messages.map((msg: any) => ({
+            id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            sources: msg.sources || [],
+            timestamp: new Date(msg.created_at),
+          }));
+
+          setMessages(loadedMessages);
+          console.log(`[ChatInterface] Loaded conversation ${data.conversation.id} with ${loadedMessages.length} messages`);
+        } else {
+          console.error('[ChatInterface] Failed to load conversation:', data.error);
+        }
+      } catch (error) {
+        console.error('[ChatInterface] Error loading conversation:', error);
+      } finally {
+        setConversationLoading(false);
+      }
+    };
+
+    loadConversation();
+  }, [userId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,8 +87,20 @@ export function ChatInterface({ userId }: ChatInterfaceProps) {
     };
 
     setMessages((prev) => [...prev, userMessage]);
+    const currentQuery = input;
     setInput('');
     setLoading(true);
+
+    // Create placeholder for assistant message
+    const assistantMessageId = (Date.now() + 1).toString();
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => [...prev, assistantMessage]);
 
     try {
       const response = await fetch('/api/query', {
@@ -61,44 +110,85 @@ export function ChatInterface({ userId }: ChatInterfaceProps) {
         },
         body: JSON.stringify({
           user_id: userId,
-          query: input,
+          query: currentQuery,
+          conversation_id: conversationId,
           filters: {
             topK: 5,
           },
         }),
       });
 
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error('Failed to process query');
+      }
 
-      if (response.ok) {
-        const assistantMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: data.answer,
-          sources: data.sources,
-          timestamp: new Date(),
-        };
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
 
-        setMessages((prev) => [...prev, assistantMessage]);
-      } else {
-        const errorMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: `Error: ${data.error || 'Failed to process query'}`,
-          timestamp: new Date(),
-        };
+      if (!reader) {
+        throw new Error('No response body');
+      }
 
-        setMessages((prev) => [...prev, errorMessage]);
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.type === 'metadata') {
+                // Update conversation ID if this was the first message
+                if (!conversationId && data.conversation_id) {
+                  setConversationId(data.conversation_id);
+                  console.log('[ChatInterface] Set conversation ID:', data.conversation_id);
+                }
+              } else if (data.type === 'token') {
+                // Append token to assistant message
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, content: msg.content + data.content }
+                      : msg
+                  )
+                );
+              } else if (data.type === 'done') {
+                console.log('[ChatInterface] Streaming completed');
+              } else if (data.type === 'error') {
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, content: `Error: ${data.error}` }
+                      : msg
+                  )
+                );
+              }
+            } catch (parseError) {
+              console.error('[ChatInterface] Error parsing SSE:', parseError);
+            }
+          }
+        }
       }
     } catch (error) {
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'Network error. Please check your connection and try again.',
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, errorMessage]);
+      console.error('[ChatInterface] Error:', error);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? {
+                ...msg,
+                content: 'Network error. Please check your connection and try again.',
+              }
+            : msg
+        )
+      );
     } finally {
       setLoading(false);
     }
@@ -118,7 +208,11 @@ export function ChatInterface({ userId }: ChatInterfaceProps) {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 ? (
+        {conversationLoading ? (
+          <div className="text-center text-gray-500 dark:text-gray-400 mt-8">
+            <p className="text-lg mb-2">Loading conversation...</p>
+          </div>
+        ) : messages.length === 0 ? (
           <div className="text-center text-gray-500 dark:text-gray-400 mt-8">
             <p className="text-lg mb-2">No messages yet</p>
             <p className="text-sm">
@@ -142,38 +236,6 @@ export function ChatInterface({ userId }: ChatInterfaceProps) {
                 }`}
               >
                 <p className="whitespace-pre-wrap">{message.content}</p>
-
-                {/* Sources */}
-                {message.sources && message.sources.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-gray-300 dark:border-gray-600">
-                    <p className="text-xs font-semibold mb-2 opacity-75">
-                      Sources:
-                    </p>
-                    <div className="space-y-2">
-                      {message.sources.map((source, idx) => (
-                        <div
-                          key={idx}
-                          className="text-xs p-2 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-600"
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-medium text-gray-900 dark:text-white">
-                              {source.title}
-                            </span>
-                            <span className="text-gray-500 dark:text-gray-400">
-                              {(source.relevance_score * 100).toFixed(0)}%
-                            </span>
-                          </div>
-                          <p className="text-gray-600 dark:text-gray-300 text-xs">
-                            {source.excerpt}
-                          </p>
-                          <span className="text-gray-400 dark:text-gray-500 text-xs">
-                            {source.source_type}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
                 <p className="text-xs opacity-50 mt-2">
                   {message.timestamp.toLocaleTimeString()}
@@ -206,12 +268,12 @@ export function ChatInterface({ userId }: ChatInterfaceProps) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask a question..."
-            disabled={loading}
+            disabled={loading || conversationLoading}
             className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <button
             type="submit"
-            disabled={!input.trim() || loading}
+            disabled={!input.trim() || loading || conversationLoading}
             className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium px-6 py-3 rounded-lg transition-colors"
           >
             {loading ? 'Sending...' : 'Send'}
