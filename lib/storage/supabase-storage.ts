@@ -78,83 +78,55 @@ function getStorageClient() {
 
 /**
  * Download file from Supabase Storage as Buffer
- * Uses Supabase REST API directly with fetch for better timeout control
+ * Uses Supabase SDK with timeout wrapper
  */
 export async function downloadFile(filePath: string, maxRetries: number = 3): Promise<Buffer> {
   const downloadTimeout = 120000; // 2 minutes timeout for download
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Missing Supabase credentials');
-  }
 
   console.log(`[Storage] Downloading file from: ${filePath}`);
-  console.log(`[Storage] Supabase URL: ${supabaseUrl}`);
-  console.log(`[Storage] Using key: ${supabaseKey ? supabaseKey.substring(0, 20) + '...' : 'MISSING'}`);
-
-  // Encode the file path for URL
-  const encodedPath = encodeURIComponent(filePath);
-  const downloadUrl = `${supabaseUrl}/storage/v1/object/${UPLOADS_BUCKET}/${encodedPath}`;
-  console.log(`[Storage] Download URL constructed: ${downloadUrl.substring(0, 100)}...`);
 
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    let abortController: AbortController | null = null;
-    
     try {
       if (attempt > 1) {
         console.log(`[Storage] Retry attempt ${attempt}/${maxRetries} for: ${filePath}`);
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 2) * 1000));
       }
 
-      console.log(`[Storage] Starting fetch request (attempt ${attempt})...`);
+      console.log(`[Storage] Getting Supabase client and downloading (attempt ${attempt})...`);
+      const supabase = getStorageClient();
 
-      // Use fetch with AbortController for proper timeout control
-      abortController = new AbortController();
-      const timeoutId = setTimeout(() => {
-        console.log(`[Storage] Timeout triggered, aborting fetch...`);
-        abortController?.abort();
-      }, downloadTimeout);
+      // Wrap the download in a timeout
+      const downloadPromise = supabase.storage
+        .from(UPLOADS_BUCKET)
+        .download(filePath);
 
-      try {
-        console.log(`[Storage] Calling fetch with timeout: ${downloadTimeout}ms`);
-        const response = await fetch(downloadUrl, {
-          signal: abortController.signal,
-          headers: {
-            'Authorization': `Bearer ${supabaseKey}`,
-            'apikey': supabaseKey,
-          },
-        });
-        console.log(`[Storage] Fetch completed, status: ${response.status}`);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Download timeout after ${downloadTimeout / 1000}s`));
+        }, downloadTimeout);
+      });
 
-        clearTimeout(timeoutId);
+      console.log(`[Storage] Starting download with ${downloadTimeout}ms timeout...`);
+      const { data, error } = await Promise.race([downloadPromise, timeoutPromise]) as any;
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        console.log(`[Storage] Converting response to buffer...`);
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-
-        console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
-
-        return buffer;
-      } catch (fetchError) {
-        clearTimeout(timeoutId);
-        
-        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-          throw new Error(`Download timeout after ${downloadTimeout / 1000}s`);
-        }
-        throw fetchError;
+      if (error) {
+        throw new Error(`Supabase download error: ${error.message}`);
       }
+
+      if (!data) {
+        throw new Error('Download returned no data');
+      }
+
+      console.log(`[Storage] Converting blob to buffer...`);
+      const arrayBuffer = await data.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+      return buffer;
     } catch (error) {
-      if (abortController) {
-        abortController.abort();
-      }
-
       lastError = error instanceof Error ? error : new Error(String(error));
       console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
 
