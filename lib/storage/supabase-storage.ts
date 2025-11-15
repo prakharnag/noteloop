@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseClient } from '@/lib/db/supabase';
 
 export const UPLOADS_BUCKET = 'uploads';
@@ -53,13 +53,37 @@ export async function uploadFile(
 }
 
 /**
+ * Get Supabase client with service role key for server-side storage operations
+ * This bypasses RLS and is needed for background processing
+ */
+function getStorageClient() {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  // Try service role key first, fallback to anon key
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error(
+      'Missing Supabase credentials. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) in .env'
+    );
+  }
+
+
+  return createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
+
+/**
  * Download file from Supabase Storage as Buffer
  * Uses service role client for server-side operations
  * Includes timeout and retry logic for reliability
  * Uses fetch with AbortController for proper timeout control
  */
 export async function downloadFile(filePath: string, maxRetries: number = 3): Promise<Buffer> {
-  const supabase = getSupabaseClient();
+  const signedUrlTimeout = 10000; // 10 seconds timeout for getting signed URL
   const downloadTimeout = 120000; // 2 minutes timeout for download
 
   console.log(`[Storage] Downloading file from: ${filePath}`);
@@ -76,11 +100,25 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 2) * 1000));
       }
 
-      // Get a signed URL for the file (this is fast and doesn't download the file)
+      // Get a signed URL for the file with timeout
       console.log(`[Storage] Getting signed URL for: ${filePath}`);
-      const { data: urlData, error: urlError } = await supabase.storage
+      const supabase = getStorageClient();
+      
+      // Wrap createSignedUrl in a timeout
+      const signedUrlPromise = supabase.storage
         .from(UPLOADS_BUCKET)
         .createSignedUrl(filePath, 300); // 5 minute expiry
+
+      const signedUrlTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Signed URL request timeout after ${signedUrlTimeout / 1000}s`));
+        }, signedUrlTimeout);
+      });
+
+      const { data: urlData, error: urlError } = await Promise.race([
+        signedUrlPromise,
+        signedUrlTimeoutPromise,
+      ]) as any;
 
       if (urlError || !urlData?.signedUrl) {
         throw new Error(`Failed to get signed URL: ${urlError?.message || 'Unknown error'}`);
