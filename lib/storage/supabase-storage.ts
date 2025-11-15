@@ -13,17 +13,19 @@ export const UPLOADS_BUCKET = 'uploads';
 
 // S3-compatible client for Supabase Storage
 function getS3Client(): S3Client {
-  const endpoint = process.env.SUPABASE_STORAGE_ENDPOINT;
-  const accessKeyId = process.env.SUPABASE_STORAGE_ACCESS_KEY;
-  const secretAccessKey = process.env.SUPABASE_STORAGE_SECRET_KEY;
+  // Support both naming conventions
+  const endpoint = process.env.SUPABASE_STORAGE_ENDPOINT || process.env.SUPABASE_S3_ENDPOINT;
+  const accessKeyId = process.env.SUPABASE_STORAGE_ACCESS_KEY || process.env.SUPABASE_S3_ACCESS_KEY;
+  const secretAccessKey = process.env.SUPABASE_STORAGE_SECRET_KEY || process.env.SUPABASE_S3_SECRET_KEY;
+  const region = process.env.SUPABASE_S3_REGION || 'us-east-1';
 
   if (!endpoint || !accessKeyId || !secretAccessKey) {
-    throw new Error('Missing S3 credentials. Set SUPABASE_STORAGE_ENDPOINT, SUPABASE_STORAGE_ACCESS_KEY, and SUPABASE_STORAGE_SECRET_KEY');
+    throw new Error('Missing S3 credentials. Set SUPABASE_STORAGE_ENDPOINT (or SUPABASE_S3_ENDPOINT), SUPABASE_STORAGE_ACCESS_KEY (or SUPABASE_S3_ACCESS_KEY), and SUPABASE_STORAGE_SECRET_KEY (or SUPABASE_S3_SECRET_KEY)');
   }
 
   return new S3Client({
     endpoint,
-    region: 'us-east-1', // Supabase uses us-east-1
+    region,
     credentials: {
       accessKeyId,
       secretAccessKey,
@@ -127,39 +129,68 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
       console.log(`[Storage] Starting S3 download (attempt ${attempt})...`);
       const s3Client = getS3Client();
 
-      // Create a timeout wrapper
-      const downloadPromise = s3Client.send(
-        new GetObjectCommand({
-          Bucket: UPLOADS_BUCKET,
-          Key: filePath,
-        })
-      );
+      // Create abort controller for the S3 request
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log(`[Storage] Timeout reached, aborting S3 request...`);
+        abortController.abort();
+      }, downloadTimeout);
 
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`Download timeout after ${downloadTimeout / 1000}s`));
-        }, downloadTimeout);
-      });
+      try {
+        // URL-encode the file path to handle spaces and special characters
+        // S3 keys should be URL-encoded, but we need to preserve the path structure
+        // Split by '/' and encode each segment separately
+        const encodedKey = filePath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+        
+        console.log(`[Storage] S3 Key (original): ${filePath}`);
+        console.log(`[Storage] S3 Key (encoded): ${encodedKey}`);
+        
+        const response = await s3Client.send(
+          new GetObjectCommand({
+            Bucket: UPLOADS_BUCKET,
+            Key: encodedKey,
+          }),
+          { abortSignal: abortController.signal }
+        );
 
-      const response = await Promise.race([downloadPromise, timeoutPromise]);
+        clearTimeout(timeoutId);
 
-      if (!response.Body) {
-        throw new Error('Download returned no data');
+        if (!response.Body) {
+          throw new Error('Download returned no data');
+        }
+
+        console.log(`[Storage] Converting stream to buffer...`);
+        // Convert stream to buffer with timeout for reading
+        const chunks: Uint8Array[] = [];
+        const stream = response.Body as any;
+        
+        // Read stream with timeout
+        const readPromise = (async () => {
+          for await (const chunk of stream) {
+            chunks.push(chunk);
+          }
+        })();
+
+        const readTimeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('Stream read timeout after 30s'));
+          }, 30000);
+        });
+
+        await Promise.race([readPromise, readTimeoutPromise]);
+
+        const buffer = Buffer.concat(chunks);
+        console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+        return buffer;
+      } catch (s3Error) {
+        clearTimeout(timeoutId);
+        
+        if (s3Error instanceof Error && s3Error.name === 'AbortError') {
+          throw new Error(`Download timeout after ${downloadTimeout / 1000}s`);
+        }
+        throw s3Error;
       }
-
-      console.log(`[Storage] Converting stream to buffer...`);
-      // Convert stream to buffer
-      const chunks: Uint8Array[] = [];
-      const stream = response.Body as any;
-      
-      for await (const chunk of stream) {
-        chunks.push(chunk);
-      }
-
-      const buffer = Buffer.concat(chunks);
-      console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
-
-      return buffer;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
