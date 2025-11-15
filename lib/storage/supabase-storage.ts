@@ -56,6 +56,7 @@ export async function uploadFile(
  * Download file from Supabase Storage as Buffer
  * Uses service role client for server-side operations
  * Includes timeout and retry logic for reliability
+ * Uses fetch with AbortController for proper timeout control
  */
 export async function downloadFile(filePath: string, maxRetries: number = 3): Promise<Buffer> {
   const supabase = getSupabaseClient();
@@ -66,6 +67,8 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    let abortController: AbortController | null = null;
+    
     try {
       if (attempt > 1) {
         console.log(`[Storage] Retry attempt ${attempt}/${maxRetries} for: ${filePath}`);
@@ -73,52 +76,64 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 2) * 1000));
       }
 
-      // Race between download and timeout
-      const downloadPromise = supabase.storage
+      // Get a signed URL for the file (this is fast and doesn't download the file)
+      console.log(`[Storage] Getting signed URL for: ${filePath}`);
+      const { data: urlData, error: urlError } = await supabase.storage
         .from(UPLOADS_BUCKET)
-        .download(filePath);
+        .createSignedUrl(filePath, 300); // 5 minute expiry
 
-      // Create a timeout promise that rejects
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`Download timeout after ${downloadTimeout / 1000}s`));
-        }, downloadTimeout);
-      });
-
-      // Race: if timeout rejects first, the whole promise rejects (caught in catch block)
-      // If download completes first, we get the result
-      const result = await Promise.race([downloadPromise, timeoutPromise]);
-      const { data, error } = result;
-
-      if (error) {
-        throw new Error(`Supabase download error: ${error.message}`);
+      if (urlError || !urlData?.signedUrl) {
+        throw new Error(`Failed to get signed URL: ${urlError?.message || 'Unknown error'}`);
       }
 
-      if (!data) {
-        throw new Error('Download returned no data');
+      console.log(`[Storage] Signed URL obtained, downloading via fetch...`);
+
+      // Use fetch with AbortController for proper timeout control
+      abortController = new AbortController();
+      const timeoutId = setTimeout(() => {
+        abortController?.abort();
+      }, downloadTimeout);
+
+      try {
+        const response = await fetch(urlData.signedUrl, {
+          signal: abortController.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        // Convert response to buffer with timeout
+        console.log(`[Storage] Converting response to buffer...`);
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+        return buffer;
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          throw new Error(`Download timeout after ${downloadTimeout / 1000}s`);
+        }
+        throw fetchError;
       }
-
-      // Convert Blob to Buffer with timeout
-      console.log(`[Storage] Converting blob to buffer...`);
-      const arrayBufferPromise = data.arrayBuffer();
-      const arrayBufferTimeout = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error('ArrayBuffer conversion timeout after 30s'));
-        }, 30000);
-      });
-
-      const arrayBuffer = await Promise.race([arrayBufferPromise, arrayBufferTimeout]);
-      const buffer = Buffer.from(arrayBuffer);
-
-      console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
-
-      return buffer;
     } catch (error) {
+      // Clean up abort controller if it exists
+      if (abortController) {
+        abortController.abort();
+      }
+
       lastError = error instanceof Error ? error : new Error(String(error));
       console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
 
       // Don't retry on timeout or non-retryable errors
-      if (lastError.message.includes('timeout') || lastError.message.includes('not found')) {
+      if (lastError.message.includes('timeout') || 
+          lastError.message.includes('not found') ||
+          lastError.message.includes('404')) {
         throw lastError;
       }
 
