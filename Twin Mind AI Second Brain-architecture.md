@@ -11,7 +11,10 @@ Functional Requirements
 
 Non-Functional Requirements
 
-1. Low Latency: The system should have low latency (\< 5s end-to-end latency under typical network conditions).  
+1. Low Latency: 
+   * Query Response: The system should have low latency (< 5s end-to-end latency under typical network conditions) for natural language queries and responses.
+   * File Upload: File uploads should return immediately (< 2s) with asynchronous processing happening in the background. For audio files, transcription can take several minutes depending on file length, but users receive immediate feedback and can track processing status.
+   * Processing Status: Status updates should be available within 2 seconds of polling requests. 
 2. Durability: The system should be durable, the data should not be lost.  
 3. Consistency Over Availability: The system should prioritize consistency over availability. The user should get up-to-date information, availability is still important but temporary downtime is often preferable to serving stale or incorrect data.
 
