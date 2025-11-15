@@ -63,7 +63,9 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
       setProcessingDocumentId(data.document_id);
 
       // Start polling for processing status
-      pollProcessingStatus(data.document_id);
+      // Audio files take longer, so we'll poll for up to 10 minutes
+      const isAudio = !!file.name.match(/\.(flac|m4a|mp3|mp4|mpeg|mpga|oga|ogg|wav|webm)$/i);
+      pollProcessingStatus(data.document_id, isAudio);
 
       // Reset form
       setFile(null);
@@ -71,7 +73,6 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
         fileInputRef.current.value = '';
       }
     } catch (error) {
-      console.error('[UploadSection] Upload error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Upload failed';
 
       toast.error('Upload failed', {
@@ -88,8 +89,9 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
     }
   };
 
-  const pollProcessingStatus = async (documentId: string) => {
-    const maxAttempts = 60;
+  const pollProcessingStatus = async (documentId: string, isAudio: boolean = false) => {
+    // Audio files need more time (up to 10 minutes), others up to 5 minutes
+    const maxAttempts = isAudio ? 300 : 150; // 2 seconds per attempt
     let attempts = 0;
 
     const poll = async () => {
@@ -129,33 +131,89 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
         // Still processing - show friendly progress messages
         attempts++;
 
-        // Update status message based on progress
-        if (attempts > 15) {
-          setUploadStatus({
-            type: 'info',
-            message: 'Almost there...',
-          });
-        } else if (attempts > 5) {
-          setUploadStatus({
-            type: 'info',
-            message: 'Making sense of your content...',
-          });
+        // Update status message based on progress and file type
+        if (isAudio) {
+          if (attempts > 200) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Almost there... Audio transcription takes time.',
+            });
+          } else if (attempts > 100) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Transcribing audio... This may take a few minutes.',
+            });
+          } else if (attempts > 30) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Processing audio file...',
+            });
+          }
+        } else {
+          if (attempts > 100) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Almost there...',
+            });
+          } else if (attempts > 30) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Making sense of your content...',
+            });
+          }
         }
 
         if (attempts < maxAttempts) {
           setTimeout(poll, 2000);
         } else {
-          toast.warning('Taking longer than usual', {
-            description: 'Your document is still being prepared',
-          });
-          setProcessingDocumentId(null);
+          // Timeout reached - check one more time, then show message
+          // The document might be completed but we stopped polling too early
+          setTimeout(async () => {
+            try {
+              const finalCheck = await fetch(`/api/ingest/status/${documentId}`);
+              if (finalCheck.ok) {
+                const finalData = await finalCheck.json();
+                if (finalData.status === 'completed') {
+                  toast.success('All set!', {
+                    description: 'Your document is ready to use',
+                  });
+                  setProcessingDocumentId(null);
+                  setUploadStatus({
+                    type: 'success',
+                    message: `All set! Your document is ready to use.`,
+                  });
+                  onUploadComplete?.();
+                  return;
+                }
+              }
+            } catch {
+              // Ignore final check errors
+            }
+            
+            // If still not completed, show timeout message but allow refresh
+            toast.info('Processing is taking longer than expected', {
+              description: 'Your document will appear in the library when ready. You can refresh the page.',
+            });
+            setProcessingDocumentId(null);
+            setUploadStatus({
+              type: 'info',
+              message: 'Processing may still be in progress. Check the document library or refresh the page.',
+            });
+            // Still trigger refresh in case it's done
+            onUploadComplete?.();
+          }, 2000);
         }
       } catch (error) {
-        console.error('[UploadSection] Status poll error:', error);
         setProcessingDocumentId(null);
         toast.error('Something went wrong', {
-          description: 'Please try again',
+          description: 'Please try again or check the document library',
         });
+        setUploadStatus({
+          type: 'error',
+          message: 'Status check failed. Please refresh the page to see if processing completed.',
+        });
+        // Still trigger refresh in case it's done
+        onUploadComplete?.();
       }
     };
 

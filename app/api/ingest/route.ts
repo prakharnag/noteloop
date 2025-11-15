@@ -41,7 +41,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const uploadStartTime = Date.now();
     console.log(`[Ingest API] Received file: ${file.name} for user: ${userId}`);
+    console.log(`[Ingest API] File size: ${file.size} bytes (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
     // Determine source type
     const docType = getDocumentType(file.name);
@@ -65,6 +67,7 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(bytes);
 
     // Upload to Supabase Storage
+    const storageUploadStartTime = Date.now();
     console.log(`[Ingest API] Uploading file to Supabase Storage...`);
     const { path: storagePath, publicUrl } = await uploadFile(
       supabase,
@@ -72,8 +75,9 @@ export async function POST(request: NextRequest) {
       file.name,
       userId
     );
-
+    const storageUploadDuration = Date.now() - storageUploadStartTime;
     console.log(`[Ingest API] File uploaded to: ${storagePath}`);
+    console.log(`[Ingest API] Storage upload took: ${(storageUploadDuration / 1000).toFixed(2)} seconds`);
 
     // Create document record with "processing" tag
     const document = await createDocument({
@@ -85,6 +89,9 @@ export async function POST(request: NextRequest) {
     });
 
     console.log(`[Ingest API] Created document: ${document.id}`);
+    
+    const totalUploadDuration = Date.now() - uploadStartTime;
+    console.log(`[Ingest API] Total upload and setup time: ${(totalUploadDuration / 1000).toFixed(2)} seconds`);
 
     // Start async processing (don't await - let it run in background)
     processDocumentAsync(document.id, storagePath, sourceType, userId)

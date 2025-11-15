@@ -102,6 +102,7 @@ This test validates the complete pipeline from ingestion to retrieval.`;
     console.log('=== Step 3: Uploading to Supabase Storage ===\n');
     const fileBuffer = await fs.promises.readFile(testFilePath);
     const { path: storagePath, publicUrl } = await uploadFile(
+      supabase,
       fileBuffer,
       'test-document.md',
       testUser.id

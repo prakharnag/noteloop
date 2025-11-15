@@ -159,7 +159,7 @@ Privacy by Design
    
 
           
-              
+              I also want to update the schema.sql. I want to remove the meetings table and its reference from the documents schema. update the architecture.md file. 
             
 
       

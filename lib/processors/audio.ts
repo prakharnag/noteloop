@@ -40,13 +40,33 @@ export async function processAudio(
     // Extract filename from path to preserve extension
     const filename = filePath.split('/').pop() || 'audio.mp3';
     console.log(`[AudioProcessor] Filename: ${filename}`);
+    console.log(`[AudioProcessor] File path: ${filePath}`);
+
+    // Check if file exists before reading
+    const { access, constants } = await import('fs/promises');
+    try {
+      await access(filePath, constants.F_OK);
+      console.log(`[AudioProcessor] File exists, proceeding to read...`);
+    } catch (accessError) {
+      console.error(`[AudioProcessor] File does not exist at path: ${filePath}`);
+      throw new Error(`Audio file not found at path: ${filePath}`);
+    }
 
     // Read file and create proper File object with filename
+    console.log(`[AudioProcessor] Reading file from disk...`);
     const fileBuffer = await readFile(filePath);
+    console.log(`[AudioProcessor] File read successfully. Size: ${fileBuffer.length} bytes`);
+    
+    console.log(`[AudioProcessor] Converting buffer to File object...`);
     const audioFile = await toFile(fileBuffer, filename);
-
-    // Call OpenAI Whisper API for transcription
-    const transcription = await getOpenAIClient().audio.transcriptions.create({
+    console.log(`[AudioProcessor] File object created successfully`);
+    
+    console.log(`[AudioProcessor] Starting OpenAI Whisper API transcription...`);
+    console.log(`[AudioProcessor] File size for transcription: ${audioFile.size || 'unknown'} bytes`);
+    
+    // Call OpenAI Whisper API for transcription with timeout
+    // Large audio files can take a long time, so we set a reasonable timeout
+    const transcriptionPromise = getOpenAIClient().audio.transcriptions.create({
       file: audioFile,
       model: 'whisper-1',
       language: options.language,
@@ -54,6 +74,13 @@ export async function processAudio(
       temperature: options.temperature ?? 0,
       response_format: 'verbose_json', // Get detailed response with timestamps
     });
+    
+    // Add timeout (30 minutes for very long audio files)
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Transcription timeout after 30 minutes')), 30 * 60 * 1000);
+    });
+    
+    const transcription = await Promise.race([transcriptionPromise, timeoutPromise]) as any;
 
     console.log(
       `[AudioProcessor] Transcription completed. Duration: ${transcription.duration}s`
@@ -80,6 +107,8 @@ export async function processAudio(
     };
   } catch (error) {
     console.error('[AudioProcessor] Error processing audio:', error);
+    console.error('[AudioProcessor] Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+    console.error('[AudioProcessor] Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
     throw new Error(
       `Failed to process audio file: ${
         error instanceof Error ? error.message : 'Unknown error'

@@ -24,14 +24,14 @@ export interface Message {
 /**
  * Create a new conversation
  */
-export async function createConversation(userId: string): Promise<Conversation> {
+export async function createConversation(userId: string, title?: string): Promise<Conversation> {
   const supabase = getSupabaseClient();
 
   const { data, error } = await supabase
     .from('conversations')
     .insert({
       user_id: userId,
-      title: 'New Conversation',
+      title: title || 'New Conversation',
     })
     .select()
     .single();

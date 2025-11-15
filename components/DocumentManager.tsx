@@ -28,7 +28,6 @@ export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps
   const loadDocuments = async () => {
     try {
       setLoading(true);
-      console.log('[DocumentManager] Loading documents for user:', userId);
 
       const response = await fetch(`/api/documents?user_id=${userId}`);
 
@@ -38,9 +37,7 @@ export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps
 
       const data = await response.json();
       setDocuments(data.documents);
-      console.log(`[DocumentManager] Loaded ${data.documents.length} documents`);
     } catch (error) {
-      console.error('[DocumentManager] Error:', error);
       toast.error('Failed to load documents', {
         description: error instanceof Error ? error.message : 'Unknown error',
       });
@@ -86,7 +83,6 @@ export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps
       // Remove from local state
       setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
     } catch (error) {
-      console.error('[DocumentManager] Error deleting document:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
       toast.error('Failed to delete document', {

@@ -13,10 +13,20 @@ export default function LandingPage() {
     setLoading(true);
     toast.loading('Redirecting to Google...', { id: 'login' });
 
+    // Get redirect URL: use NEXT_PUBLIC_SITE_URL if set, otherwise use window.location.origin
+    // This ensures it works in production (Vercel) and local production testing
+    const redirectUrl = process.env.NEXT_PUBLIC_SITE_URL
+      ? `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`
+      : `${window.location.origin}/auth/callback`;
+
+    console.log('[Auth] Redirect URL:', redirectUrl);
+    console.log('[Auth] NEXT_PUBLIC_SITE_URL:', process.env.NEXT_PUBLIC_SITE_URL);
+    console.log('[Auth] window.location.origin:', window.location.origin);
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: redirectUrl,
       },
     });
 

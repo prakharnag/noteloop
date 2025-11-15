@@ -91,7 +91,6 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
 
         // If a specific conversation ID is provided, load it
         if (propConversationId) {
-          console.log('[ChatInterface] Loading specific conversation:', propConversationId);
           const response = await fetch(`/api/conversations/${propConversationId}/messages`);
 
           if (!response.ok) {
@@ -111,13 +110,11 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
 
           setMessages(loadedMessages);
           onConversationLoaded?.(propConversationId);
-          console.log(`[ChatInterface] Loaded conversation ${propConversationId} with ${loadedMessages.length} messages`);
           // Scroll to bottom when conversation loads
           shouldAutoScrollRef.current = true;
           setTimeout(() => scrollToBottom(true), 100);
         } else {
           // Load latest conversation
-          console.log('[ChatInterface] Loading latest conversation for user:', userId);
           const response = await fetch(`/api/conversations/latest?user_id=${userId}`);
 
           if (!response.ok) {
@@ -137,13 +134,11 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
 
           setMessages(loadedMessages);
           onConversationLoaded?.(data.conversation.id);
-          console.log(`[ChatInterface] Loaded conversation ${data.conversation.id} with ${loadedMessages.length} messages`);
           // Scroll to bottom when conversation loads
           shouldAutoScrollRef.current = true;
           setTimeout(() => scrollToBottom(true), 100);
         }
       } catch (error) {
-        console.error('[ChatInterface] Error loading conversation:', error);
         toast.error('Failed to load conversation', {
           description: 'Please try again',
         });
@@ -235,7 +230,6 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
                 // Update conversation ID if this was the first message
                 if (!conversationId && data.conversation_id) {
                   setConversationId(data.conversation_id);
-                  console.log('[ChatInterface] Set conversation ID:', data.conversation_id);
                 }
               } else if (data.type === 'token') {
                 // Append token to assistant message
@@ -247,19 +241,17 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
                   )
                 );
               } else if (data.type === 'done') {
-                console.log('[ChatInterface] Streaming completed');
                 toast.success('Response complete!');
               } else if (data.type === 'error') {
                 throw new Error(data.error);
               }
             } catch (parseError) {
-              console.error('[ChatInterface] Error parsing SSE:', parseError);
+              // Silently handle parse errors
             }
           }
         }
       }
     } catch (error) {
-      console.error('[ChatInterface] Error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
 
       toast.error('Failed to get response', {

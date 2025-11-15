@@ -45,14 +45,16 @@ export async function GET(
       .eq('document_id', documentId);
 
     if (chunksError) {
-      console.error('[Status API] Error counting chunks:', chunksError);
+      // Silently handle chunk count errors
     }
 
-    // Determine status from tags
+    // Determine status from tags and chunks
+    // If chunks exist, consider it completed even if tag isn't set yet
     let status: 'processing' | 'completed' | 'failed';
     if (document.tags.includes('failed')) {
       status = 'failed';
-    } else if (document.tags.includes('completed')) {
+    } else if (document.tags.includes('completed') || (chunksCount && chunksCount > 0)) {
+      // Completed if tag is set OR if chunks exist (more reliable)
       status = 'completed';
     } else {
       status = 'processing';
@@ -76,7 +78,6 @@ export async function GET(
     });
 
   } catch (error) {
-    console.error('[Status API] Error:', error);
     return NextResponse.json(
       {
         error: 'Failed to get document status',
