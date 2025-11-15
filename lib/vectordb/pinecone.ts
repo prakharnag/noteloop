@@ -91,13 +91,24 @@ export async function upsertVectors(
     console.log(`[Pinecone] Upserting ${vectors.length} vectors...`);
 
     // Pinecone accepts batches of up to 100 vectors
+    // Process multiple batches in parallel for faster upserts
     const batchSize = 100;
+    const batchPromises: Promise<void>[] = [];
+    
     for (let i = 0; i < vectors.length; i += batchSize) {
       const batch = vectors.slice(i, i + batchSize);
-      await index.upsert(batch);
+      const batchNumber = Math.floor(i / batchSize) + 1;
+      const totalBatches = Math.ceil(vectors.length / batchSize);
+      
+      console.log(`[Pinecone] Upserting batch ${batchNumber}/${totalBatches} (${batch.length} vectors)`);
+      
+      batchPromises.push(index.upsert(batch));
     }
 
-    console.log('[Pinecone] Vectors upserted successfully');
+    // Wait for all batches to complete in parallel
+    await Promise.all(batchPromises);
+
+    console.log('[Pinecone] All vectors upserted successfully');
   } catch (error) {
     console.error('[Pinecone] Error upserting vectors:', error);
     throw new Error(
