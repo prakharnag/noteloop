@@ -78,15 +78,25 @@ function getStorageClient() {
 
 /**
  * Download file from Supabase Storage as Buffer
- * Uses service role client for server-side operations
- * Includes timeout and retry logic for reliability
- * Uses fetch with AbortController for proper timeout control
+ * Uses Supabase REST API directly with fetch for better timeout control
  */
 export async function downloadFile(filePath: string, maxRetries: number = 3): Promise<Buffer> {
-  const signedUrlTimeout = 10000; // 10 seconds timeout for getting signed URL
   const downloadTimeout = 120000; // 2 minutes timeout for download
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Missing Supabase credentials');
+  }
 
   console.log(`[Storage] Downloading file from: ${filePath}`);
+  console.log(`[Storage] Supabase URL: ${supabaseUrl}`);
+  console.log(`[Storage] Using key: ${supabaseKey ? supabaseKey.substring(0, 20) + '...' : 'MISSING'}`);
+
+  // Encode the file path for URL
+  const encodedPath = encodeURIComponent(filePath);
+  const downloadUrl = `${supabaseUrl}/storage/v1/object/${UPLOADS_BUCKET}/${encodedPath}`;
+  console.log(`[Storage] Download URL constructed: ${downloadUrl.substring(0, 100)}...`);
 
   let lastError: Error | null = null;
 
@@ -96,46 +106,28 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
     try {
       if (attempt > 1) {
         console.log(`[Storage] Retry attempt ${attempt}/${maxRetries} for: ${filePath}`);
-        // Exponential backoff: wait 1s, 2s, 4s
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 2) * 1000));
       }
 
-      // Get a signed URL for the file with timeout
-      console.log(`[Storage] Getting signed URL for: ${filePath}`);
-      const supabase = getStorageClient();
-      
-      // Wrap createSignedUrl in a timeout
-      const signedUrlPromise = supabase.storage
-        .from(UPLOADS_BUCKET)
-        .createSignedUrl(filePath, 300); // 5 minute expiry
-
-      const signedUrlTimeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`Signed URL request timeout after ${signedUrlTimeout / 1000}s`));
-        }, signedUrlTimeout);
-      });
-
-      const { data: urlData, error: urlError } = await Promise.race([
-        signedUrlPromise,
-        signedUrlTimeoutPromise,
-      ]) as any;
-
-      if (urlError || !urlData?.signedUrl) {
-        throw new Error(`Failed to get signed URL: ${urlError?.message || 'Unknown error'}`);
-      }
-
-      console.log(`[Storage] Signed URL obtained, downloading via fetch...`);
+      console.log(`[Storage] Starting fetch request (attempt ${attempt})...`);
 
       // Use fetch with AbortController for proper timeout control
       abortController = new AbortController();
       const timeoutId = setTimeout(() => {
+        console.log(`[Storage] Timeout triggered, aborting fetch...`);
         abortController?.abort();
       }, downloadTimeout);
 
       try {
-        const response = await fetch(urlData.signedUrl, {
+        console.log(`[Storage] Calling fetch with timeout: ${downloadTimeout}ms`);
+        const response = await fetch(downloadUrl, {
           signal: abortController.signal,
+          headers: {
+            'Authorization': `Bearer ${supabaseKey}`,
+            'apikey': supabaseKey,
+          },
         });
+        console.log(`[Storage] Fetch completed, status: ${response.status}`);
 
         clearTimeout(timeoutId);
 
@@ -143,7 +135,6 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        // Convert response to buffer with timeout
         console.log(`[Storage] Converting response to buffer...`);
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
@@ -160,7 +151,6 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
         throw fetchError;
       }
     } catch (error) {
-      // Clean up abort controller if it exists
       if (abortController) {
         abortController.abort();
       }
@@ -168,21 +158,18 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
       lastError = error instanceof Error ? error : new Error(String(error));
       console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
 
-      // Don't retry on timeout or non-retryable errors
       if (lastError.message.includes('timeout') || 
           lastError.message.includes('not found') ||
           lastError.message.includes('404')) {
         throw lastError;
       }
 
-      // If this was the last attempt, throw the error
       if (attempt === maxRetries) {
         throw new Error(`Failed to download file after ${maxRetries} attempts: ${lastError.message}`);
       }
     }
   }
 
-  // This should never be reached, but TypeScript needs it
   throw lastError || new Error('Download failed for unknown reason');
 }
 
