@@ -12,16 +12,34 @@ import { getSupabaseClient } from '@/lib/db/supabase';
 export const UPLOADS_BUCKET = 'uploads';
 
 // S3-compatible client for Supabase Storage
+// According to Supabase docs: https://supabase.com/docs/guides/storage/s3/authentication
+// Use direct storage hostname for optimal performance: https://project_ref.storage.supabase.co/storage/v1/s3
 function getS3Client(): S3Client {
   // Support both naming conventions
-  const endpoint = process.env.SUPABASE_STORAGE_ENDPOINT || process.env.SUPABASE_S3_ENDPOINT;
+  let endpoint = process.env.SUPABASE_STORAGE_ENDPOINT || process.env.SUPABASE_S3_ENDPOINT;
   const accessKeyId = process.env.SUPABASE_STORAGE_ACCESS_KEY || process.env.SUPABASE_S3_ACCESS_KEY;
   const secretAccessKey = process.env.SUPABASE_STORAGE_SECRET_KEY || process.env.SUPABASE_S3_SECRET_KEY;
-  const region = process.env.SUPABASE_S3_REGION || 'us-east-1';
+  const region = process.env.SUPABASE_S3_REGION || process.env.SUPABASE_REGION || 'us-east-1';
 
   if (!endpoint || !accessKeyId || !secretAccessKey) {
     throw new Error('Missing S3 credentials. Set SUPABASE_STORAGE_ENDPOINT (or SUPABASE_S3_ENDPOINT), SUPABASE_STORAGE_ACCESS_KEY (or SUPABASE_S3_ACCESS_KEY), and SUPABASE_STORAGE_SECRET_KEY (or SUPABASE_S3_SECRET_KEY)');
   }
+
+  // Ensure endpoint ends with /storage/v1/s3 as per Supabase docs
+  if (!endpoint.endsWith('/storage/v1/s3')) {
+    // If it's just the base URL, construct the full endpoint
+    if (endpoint.includes('storage.supabase.co')) {
+      endpoint = endpoint.replace(/\/$/, '') + '/storage/v1/s3';
+    } else {
+      // If it's the project URL, convert to storage URL
+      const projectRef = process.env.SUPABASE_URL?.match(/https?:\/\/([^.]+)\.supabase\.co/)?.[1];
+      if (projectRef) {
+        endpoint = `https://${projectRef}.storage.supabase.co/storage/v1/s3`;
+      }
+    }
+  }
+
+  console.log(`[Storage] S3 Client Config - Endpoint: ${endpoint}, Region: ${region}`);
 
   return new S3Client({
     endpoint,
@@ -30,7 +48,7 @@ function getS3Client(): S3Client {
       accessKeyId,
       secretAccessKey,
     },
-    forcePathStyle: true, // Required for S3-compatible APIs
+    forcePathStyle: true, // Required for S3-compatible APIs per Supabase docs
   });
 }
 
@@ -137,21 +155,21 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
       }, downloadTimeout);
 
       try {
-        // URL-encode the file path to handle spaces and special characters
-        // S3 keys should be URL-encoded, but we need to preserve the path structure
-        // Split by '/' and encode each segment separately
-        const encodedKey = filePath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+        // According to AWS SDK docs, the Key should be the exact path as stored
+        // The SDK handles encoding internally. Don't pre-encode it.
+        // The filePath is stored exactly as: userId/fileId-filename (with spaces preserved)
+        console.log(`[Storage] S3 Key: ${filePath}`);
+        console.log(`[Storage] Bucket: ${UPLOADS_BUCKET}`);
+        console.log(`[Storage] Sending GetObjectCommand...`);
         
-        console.log(`[Storage] S3 Key (original): ${filePath}`);
-        console.log(`[Storage] S3 Key (encoded): ${encodedKey}`);
+        const command = new GetObjectCommand({
+          Bucket: UPLOADS_BUCKET,
+          Key: filePath, // Use exact path as stored - AWS SDK handles encoding
+        });
         
-        const response = await s3Client.send(
-          new GetObjectCommand({
-            Bucket: UPLOADS_BUCKET,
-            Key: encodedKey,
-          }),
-          { abortSignal: abortController.signal }
-        );
+        console.log(`[Storage] Command created, sending request...`);
+        const response = await s3Client.send(command, { abortSignal: abortController.signal });
+        console.log(`[Storage] GetObjectCommand completed, response received`);
 
         clearTimeout(timeoutId);
 
