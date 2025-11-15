@@ -58,14 +58,21 @@ export async function processDocumentAsync(
       );
     }
 
-    // Step 3: Chunk the content
+    // Step 3: Validate extracted content (full validation happens here)
+    if (!processedContent.text || processedContent.text.trim().length === 0) {
+      throw new Error(
+        sourceType === 'audio'
+          ? 'No text content could be extracted from audio transcription.'
+          : sourceType === 'pdf'
+          ? 'No text content could be extracted from this PDF. It may be an image-only PDF or corrupted file.'
+          : 'No text content could be extracted from this Markdown file.'
+      );
+    }
+
+    // Step 4: Chunk the content
     const chunkStartTime = Date.now();
     console.log('[AsyncProcessor] Chunking content...');
     console.log(`[AsyncProcessor] Content length: ${processedContent.text.length} characters`);
-    
-    if (!processedContent.text || processedContent.text.trim().length === 0) {
-      throw new Error('No text content extracted from file');
-    }
 
     const chunks = chunkText(processedContent.text, {
       maxTokens: 512,
