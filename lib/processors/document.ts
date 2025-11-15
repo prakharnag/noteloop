@@ -62,29 +62,7 @@ export async function processPDFFromBuffer(
     const { text: textPages, totalPages } = await extractText(new Uint8Array(buffer));
 
     // Join all pages into a single text string
-    let text = textPages.join('\n\n');
-
-    // If unpdf returned very little text, try a fallback using pdf-parse (more robust for some PDFs)
-    if (text.trim().length < 20) {
-      try {
-        console.warn(
-          `[DocumentProcessor] unpdf produced very little text (${text.length} chars). Trying pdf-parse fallback...`
-        );
-  // @ts-ignore - dynamic import optional (pdf-parse may not be installed in some environments)
-  const pdfParse = (await import('pdf-parse')).default || (await import('pdf-parse'));
-  const parsed = await pdfParse(buffer);
-        if (parsed && typeof parsed.text === 'string' && parsed.text.trim().length > text.trim().length) {
-          text = parsed.text;
-          console.log(
-            `[DocumentProcessor] pdf-parse fallback succeeded. New text length: ${text.length}`
-          );
-        } else {
-          console.warn('[DocumentProcessor] pdf-parse fallback did not extract more text.');
-        }
-      } catch (fallbackErr) {
-        console.error('[DocumentProcessor] pdf-parse fallback error:', fallbackErr);
-      }
-    }
+    const text = textPages.join('\n\n');
 
     console.log(`[DocumentProcessor] Extracted text from ${totalPages} pages, total chars: ${text.length}`);
     console.log(`[DocumentProcessor] First 200 chars: ${text.substring(0, 200)}`);

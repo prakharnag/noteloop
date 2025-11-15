@@ -5,7 +5,6 @@
 
 import OpenAI from 'openai';
 import { ProcessedContent } from '@/types';
-import { createReadStream } from 'fs';
 
 let openai: OpenAI | null = null;
 
@@ -34,12 +33,21 @@ export async function processAudio(
   try {
     console.log(`[AudioProcessor] Processing audio file: ${filePath}`);
 
-    // Create a read stream for the audio file
-    const audioStream = createReadStream(filePath) as any;
+    // Import toFile helper from OpenAI SDK
+    const { toFile } = await import('openai/uploads');
+    const { readFile } = await import('fs/promises');
+
+    // Extract filename from path to preserve extension
+    const filename = filePath.split('/').pop() || 'audio.mp3';
+    console.log(`[AudioProcessor] Filename: ${filename}`);
+
+    // Read file and create proper File object with filename
+    const fileBuffer = await readFile(filePath);
+    const audioFile = await toFile(fileBuffer, filename);
 
     // Call OpenAI Whisper API for transcription
     const transcription = await getOpenAIClient().audio.transcriptions.create({
-      file: audioStream,
+      file: audioFile,
       model: 'whisper-1',
       language: options.language,
       prompt: options.prompt,
@@ -133,24 +141,43 @@ export async function processAudioFromBuffer(
 
 /**
  * Get MIME type based on file extension
+ * Supports all Whisper API audio formats
  */
 function getAudioMimeType(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase();
   const mimeTypes: Record<string, string> = {
-    mp3: 'audio/mpeg',
+    // Whisper supported formats
+    flac: 'audio/flac',
     m4a: 'audio/mp4',
+    mp3: 'audio/mpeg',
+    mp4: 'audio/mp4',
+    mpeg: 'audio/mpeg',
+    mpga: 'audio/mpeg',
+    oga: 'audio/ogg',
+    ogg: 'audio/ogg',
     wav: 'audio/wav',
     webm: 'audio/webm',
-    ogg: 'audio/ogg',
   };
   return mimeTypes[ext || ''] || 'audio/mpeg';
 }
 
 /**
  * Validate audio file format
+ * All formats supported by OpenAI Whisper API
  */
 export function isValidAudioFile(filename: string): boolean {
-  const validExtensions = ['mp3', 'm4a', 'wav', 'webm', 'ogg'];
+  const validExtensions = [
+    'flac',
+    'm4a',
+    'mp3',
+    'mp4',
+    'mpeg',
+    'mpga',
+    'oga',
+    'ogg',
+    'wav',
+    'webm',
+  ];
   const ext = filename.split('.').pop()?.toLowerCase();
   return validExtensions.includes(ext || '');
 }

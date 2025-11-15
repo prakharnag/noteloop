@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateEmbedding } from '@/lib/vectordb/embeddings';
 import { queryVectors } from '@/lib/vectordb/pinecone';
 import { getSupabaseClient } from '@/lib/db/supabase';
-import { getConversationMessages, addMessage, getOrCreateConversation } from '@/lib/db/conversations';
+import { getConversationMessages, addMessage, getOrCreateConversation, getUserConversations } from '@/lib/db/conversations';
 import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
@@ -55,9 +55,21 @@ export async function POST(request: NextRequest) {
       console.log(`[Query API] Created/using conversation: ${currentConversationId}`);
     }
 
-    // Get conversation history
+    // Get conversation history for current conversation
     const previousMessages = await getConversationMessages(currentConversationId);
-    console.log(`[Query API] Loaded ${previousMessages.length} previous messages`);
+    console.log(`[Query API] Loaded ${previousMessages.length} previous messages from current conversation`);
+
+    // Get AI Memory: Recent messages from other conversations
+    const allConversations = await getUserConversations(userId);
+    const otherConversations = allConversations.filter(c => c.id !== currentConversationId);
+
+    let aiMemoryMessages: any[] = [];
+    for (const conv of otherConversations.slice(0, 3)) { // Last 3 conversations
+      const messages = await getConversationMessages(conv.id);
+      // Take last 10 messages from each conversation
+      aiMemoryMessages.push(...messages.slice(-10));
+    }
+    console.log(`[Query API] Loaded ${aiMemoryMessages.length} messages from previous conversations for AI memory`);
 
     // Step 1: Generate embedding for the query
     console.log('[Query API] Generating query embedding...');
@@ -132,12 +144,22 @@ export async function POST(request: NextRequest) {
 
     // Step 7: Generate answer using LLM with conversation history (STREAMING)
     console.log('[Query API] Generating answer with LLM (streaming)...');
+
+    // Build AI Memory context from previous conversations
+    const aiMemoryContext = aiMemoryMessages.length > 0
+      ? `\n\nPrevious conversation context (AI Memory):\n${aiMemoryMessages.map(msg =>
+          `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
+        ).join('\n')}`
+      : '';
+
     const systemPrompt = `You are a helpful AI assistant that answers questions based on the user's personal knowledge base.
 
 Use the provided context to answer the question. If the context doesn't contain enough information to answer the question, say so honestly.
 
+You also have access to previous conversation history (AI Memory), which you can reference to provide continuity across conversations.
+
 Context from knowledge base:
-${context}`;
+${context}${aiMemoryContext}`;
 
     // Build messages array with conversation history
     const conversationHistory = previousMessages.map(msg => ({
@@ -198,6 +220,20 @@ ${context}`;
           // Save complete answer to database
           console.log('[Query API] Saving assistant response...');
           await addMessage(currentConversationId, 'assistant', fullAnswer, sources);
+
+          // Auto-generate conversation title from first message
+          if (previousMessages.length === 0) {
+            // This is the first message in the conversation
+            const titleWords = query.split(' ').slice(0, 6).join(' ');
+            const title = titleWords.length < query.length ? `${titleWords}...` : titleWords;
+
+            console.log(`[Query API] Auto-generating conversation title: "${title}"`);
+            const supabase = getSupabaseClient();
+            await supabase
+              .from('conversations')
+              .update({ title })
+              .eq('id', currentConversationId);
+          }
 
           // Send completion signal
           controller.enqueue(

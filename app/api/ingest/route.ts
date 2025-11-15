@@ -51,11 +51,11 @@ export async function POST(request: NextRequest) {
       sourceType = 'pdf';
     } else if (docType === 'markdown') {
       sourceType = 'markdown';
-    } else if (file.name.match(/\.(mp3|m4a|wav|webm|ogg)$/i)) {
+    } else if (file.name.match(/\.(flac|m4a|mp3|mp4|mpeg|mpga|oga|ogg|wav|webm)$/i)) {
       sourceType = 'audio';
     } else {
       return NextResponse.json(
-        { error: 'Unsupported file type. Supported: PDF, Markdown, Audio (mp3, m4a, wav)' },
+        { error: 'Unsupported file type. Supported: PDF, Markdown, Audio (mp3, m4a, wav, flac, ogg, webm, mp4, mpeg, mpga, oga)' },
         { status: 400 }
       );
     }

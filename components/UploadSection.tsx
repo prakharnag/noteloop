@@ -1,50 +1,47 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import { toast } from 'sonner';
+import { Upload, FileText, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 
 interface UploadSectionProps {
   userId: string;
+  onUploadComplete?: () => void;
 }
 
-export function UploadSection({ userId }: UploadSectionProps) {
+export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) {
   const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState('');
-  const [tags, setTags] = useState('');
   const [uploading, setUploading] = useState(false);
-  const [status, setStatus] = useState<{
+  const [uploadStatus, setUploadStatus] = useState<{
     type: 'success' | 'error' | 'info';
     message: string;
   } | null>(null);
-  const [documentId, setDocumentId] = useState<string | null>(null);
+  const [processingDocumentId, setProcessingDocumentId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
-      if (!title) {
-        setTitle(e.target.files[0].name);
-      }
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      setUploadStatus(null);
     }
   };
 
-  const handleUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const handleUpload = async () => {
     if (!file) {
-      setStatus({ type: 'error', message: 'Please select a file' });
+      toast.error('No file selected');
       return;
     }
 
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('user_id', userId);
+
     setUploading(true);
-    setStatus(null);
+    setUploadStatus(null);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('user_id', userId);
-      formData.append('title', title || file.name);
-      if (tags) {
-        formData.append('tags', tags);
-      }
+      toast.loading('Uploading file...', { id: 'upload' });
 
       const response = await fetch('/api/ingest', {
         method: 'POST',
@@ -53,148 +50,232 @@ export function UploadSection({ userId }: UploadSectionProps) {
 
       const data = await response.json();
 
-      if (response.ok) {
-        setDocumentId(data.document_id);
-        setStatus({
-          type: 'success',
-          message: `File uploaded! Processing in background...`,
-        });
-        setFile(null);
-        setTitle('');
-        setTags('');
-        // Reset file input
-        const fileInput = document.getElementById('file-input') as HTMLInputElement;
-        if (fileInput) fileInput.value = '';
+      if (!response.ok) {
+        throw new Error(data.error || 'Upload failed');
+      }
 
-        // Poll for status
-        pollStatus(data.document_id);
-      } else {
-        setStatus({
-          type: 'error',
-          message: data.error || 'Upload failed',
-        });
+      toast.success('File uploaded successfully!', { id: 'upload' });
+      setUploadStatus({
+        type: 'info',
+        message: `Reading your document...`,
+      });
+
+      setProcessingDocumentId(data.document_id);
+
+      // Start polling for processing status
+      pollProcessingStatus(data.document_id);
+
+      // Reset form
+      setFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
       }
     } catch (error) {
-      setStatus({
+      console.error('[UploadSection] Upload error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed';
+
+      toast.error('Upload failed', {
+        id: 'upload',
+        description: errorMessage,
+      });
+
+      setUploadStatus({
         type: 'error',
-        message: 'Network error. Please try again.',
+        message: errorMessage,
       });
     } finally {
       setUploading(false);
     }
   };
 
-  const pollStatus = async (docId: string) => {
+  const pollProcessingStatus = async (documentId: string) => {
+    const maxAttempts = 60;
     let attempts = 0;
-    const maxAttempts = 60; // 2 minutes max
 
-    const checkStatus = async () => {
+    const poll = async () => {
       try {
-        const response = await fetch(`/api/ingest/status/${docId}`);
+        const response = await fetch(`/api/ingest/status/${documentId}`);
+
+        if (!response.ok) {
+          throw new Error('Failed to check status');
+        }
+
         const data = await response.json();
 
         if (data.status === 'completed') {
-          setStatus({
+          toast.success('All set!', {
+            description: 'Your document is ready to use',
+          });
+          setProcessingDocumentId(null);
+          setUploadStatus({
             type: 'success',
-            message: `✓ Processing complete! ${data.chunks_count} chunks created.`,
+            message: `All set! Your document is ready to use.`,
           });
+          // Trigger document library refresh
+          onUploadComplete?.();
+          return;
         } else if (data.status === 'failed') {
-          setStatus({
-            type: 'error',
-            message: 'Processing failed. Please try again.',
+          toast.error('Something went wrong', {
+            description: data.message || 'Please try uploading again',
           });
-        } else if (attempts < maxAttempts) {
-          attempts++;
-          setTimeout(checkStatus, 2000); // Check every 2 seconds
+          setProcessingDocumentId(null);
+          setUploadStatus({
+            type: 'error',
+            message: `Oops! ${data.message || 'Please try uploading again'}`,
+          });
+          return;
+        }
+
+        // Still processing - show friendly progress messages
+        attempts++;
+
+        // Update status message based on progress
+        if (attempts > 15) {
+          setUploadStatus({
+            type: 'info',
+            message: 'Almost there...',
+          });
+        } else if (attempts > 5) {
+          setUploadStatus({
+            type: 'info',
+            message: 'Making sense of your content...',
+          });
+        }
+
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 2000);
+        } else {
+          toast.warning('Taking longer than usual', {
+            description: 'Your document is still being prepared',
+          });
+          setProcessingDocumentId(null);
         }
       } catch (error) {
-        console.error('Error checking status:', error);
+        console.error('[UploadSection] Status poll error:', error);
+        setProcessingDocumentId(null);
+        toast.error('Something went wrong', {
+          description: 'Please try again',
+        });
       }
     };
 
-    checkStatus();
+    poll();
+  };
+
+  const getSupportedFormats = () => {
+    return 'PDF, Markdown (.md), Audio (.mp3, .m4a, .wav, .flac, .ogg, .webm, .mp4, .mpeg, .mpga, .oga)';
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
-      <h2 className="text-2xl font-bold mb-4 text-gray-900 dark:text-white">
-        Upload Content
-      </h2>
+    <div className="bg-white backdrop-blur-sm rounded-2xl shadow-md p-6 border border-[hsl(214.3,25%,88%)]">
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-4">
+        <div className="p-2 rounded-lg bg-[hsl(25,45%,82%)]">
+          <Upload className="w-5 h-5 text-[hsl(214.3,25%,25%)]" />
+        </div>
+        <h3 className="text-xl font-bold text-[hsl(214.3,25%,25%)]">
+          Upload Document
+        </h3>
+      </div>
 
-      <form onSubmit={handleUpload} className="space-y-4">
-        {/* File Input */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            File
-          </label>
+      <p className="text-sm text-[hsl(214.3,20%,35%)] mb-6">
+        Upload files to add to your knowledge base
+      </p>
+
+      {/* File Input */}
+      <div className="space-y-4">
+        <div className="border-2 border-dashed border-[hsl(214.3,25%,88%)] rounded-xl p-6 text-center hover:border-[hsl(214.3,28%,75%)] transition-colors cursor-pointer bg-[hsl(214.3,25%,97%)]">
           <input
-            id="file-input"
+            ref={fileInputRef}
             type="file"
-            accept=".pdf,.md,.markdown,.mp3,.m4a,.wav"
             onChange={handleFileChange}
-            className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900 dark:file:text-blue-300"
+            accept=".pdf,.md,.mp3,.m4a,.wav,.flac,.ogg,.webm,.mp4,.mpeg,.mpga,.oga"
+            className="hidden"
+            id="file-upload"
+            disabled={uploading}
           />
-          <p className="mt-1 text-xs text-gray-500">
-            Supported: PDF, Markdown, Audio (MP3, M4A, WAV)
-          </p>
-        </div>
-
-        {/* Title Input */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            Title (optional)
+          <label
+            htmlFor="file-upload"
+            className="cursor-pointer flex flex-col items-center"
+          >
+            <FileText className="w-12 h-12 text-[hsl(25,45%,82%)] mb-3" />
+            <p className="text-sm font-medium text-[hsl(214.3,25%,25%)] mb-1">
+              {file ? file.name : 'Click to select a file'}
+            </p>
+            <p className="text-xs text-[hsl(214.3,15%,45%)]">
+              {getSupportedFormats()}
+            </p>
           </label>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Document title"
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-          />
-        </div>
-
-        {/* Tags Input */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            Tags (optional)
-          </label>
-          <input
-            type="text"
-            value={tags}
-            onChange={(e) => setTags(e.target.value)}
-            placeholder="work, meeting, notes"
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-          />
-          <p className="mt-1 text-xs text-gray-500">Comma-separated</p>
         </div>
 
         {/* Upload Button */}
         <button
-          type="submit"
-          disabled={!file || uploading}
-          className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-3 px-6 rounded-lg transition-colors"
+          onClick={handleUpload}
+          disabled={!file || uploading || processingDocumentId !== null}
+          className="w-full bg-[hsl(25,45%,82%)] hover:bg-[hsl(25,50%,72%)] disabled:bg-[hsl(214.3,15%,60%)] text-[hsl(214.3,25%,25%)] font-medium py-3 rounded-xl transition-all disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md"
         >
-          {uploading ? 'Uploading...' : 'Upload & Process'}
-        </button>
-      </form>
-
-      {/* Status Message */}
-      {status && (
-        <div
-          className={`mt-4 p-4 rounded-lg ${
-            status.type === 'success'
-              ? 'bg-green-50 text-green-800 dark:bg-green-900 dark:text-green-200'
-              : status.type === 'error'
-              ? 'bg-red-50 text-red-800 dark:bg-red-900 dark:text-red-200'
-              : 'bg-blue-50 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
-          }`}
-        >
-          <p className="text-sm">{status.message}</p>
-          {documentId && (
-            <p className="text-xs mt-1 opacity-75">Doc ID: {documentId}</p>
+          {uploading ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              Uploading...
+            </>
+          ) : processingDocumentId ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              Processing...
+            </>
+          ) : (
+            <>
+              <Upload className="w-5 h-5" />
+              Upload
+            </>
           )}
-        </div>
-      )}
+        </button>
+
+        {/* Status Message */}
+        {uploadStatus && (
+          <div
+            className={`p-4 rounded-xl border ${
+              uploadStatus.type === 'success'
+                ? 'bg-[hsl(150,35%,90%)] border-[hsl(150,35%,75%)]'
+                : uploadStatus.type === 'error'
+                ? 'bg-[hsl(0,45%,95%)] border-[hsl(0,45%,80%)]'
+                : 'bg-[hsl(214.3,25%,94%)] border-[hsl(214.3,25%,88%)]'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              {uploadStatus.type === 'success' && (
+                <CheckCircle2 className="w-5 h-5 text-[hsl(150,35%,40%)] shrink-0 mt-0.5" />
+              )}
+              {uploadStatus.type === 'error' && (
+                <XCircle className="w-5 h-5 text-[hsl(0,45%,50%)] shrink-0 mt-0.5" />
+              )}
+              {uploadStatus.type === 'info' && (
+                <Loader2 className="w-5 h-5 text-[hsl(214.3,28%,75%)] shrink-0 mt-0.5 animate-spin" />
+              )}
+              <p
+                className={`text-sm ${
+                  uploadStatus.type === 'success'
+                    ? 'text-[hsl(150,35%,30%)]'
+                    : uploadStatus.type === 'error'
+                    ? 'text-[hsl(0,45%,40%)]'
+                    : 'text-[hsl(214.3,25%,25%)]'
+                }`}
+              >
+                {uploadStatus.message}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Info */}
+      <div className="mt-6 pt-6 border-t border-[hsl(214.3,25%,88%)]">
+        <p className="text-xs text-[hsl(214.3,15%,45%)]">
+          💡 <strong>Tip:</strong> Larger files may take a few minutes to process.
+          You'll be notified when processing is complete.
+        </p>
+      </div>
     </div>
   );
 }

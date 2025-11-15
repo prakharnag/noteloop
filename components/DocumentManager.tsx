@@ -1,9 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
+import { FileText, Mic, FileCode, Trash2, Loader2, RefreshCw, Library } from 'lucide-react';
 
 interface DocumentManagerProps {
   userId: string;
+  refreshTrigger?: number;
 }
 
 interface Document {
@@ -17,31 +20,30 @@ interface Document {
   chunk_count: number;
 }
 
-export function DocumentManager({ userId }: DocumentManagerProps) {
+export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps) {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const loadDocuments = async () => {
     try {
       setLoading(true);
-      setError(null);
       console.log('[DocumentManager] Loading documents for user:', userId);
 
       const response = await fetch(`/api/documents?user_id=${userId}`);
-      const data = await response.json();
 
-      if (response.ok) {
-        setDocuments(data.documents);
-        console.log(`[DocumentManager] Loaded ${data.documents.length} documents`);
-      } else {
-        setError(data.error || 'Failed to load documents');
-        console.error('[DocumentManager] Error loading documents:', data.error);
+      if (!response.ok) {
+        throw new Error('Failed to load documents');
       }
+
+      const data = await response.json();
+      setDocuments(data.documents);
+      console.log(`[DocumentManager] Loaded ${data.documents.length} documents`);
     } catch (error) {
       console.error('[DocumentManager] Error:', error);
-      setError('Network error. Please try again.');
+      toast.error('Failed to load documents', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     } finally {
       setLoading(false);
     }
@@ -51,32 +53,46 @@ export function DocumentManager({ userId }: DocumentManagerProps) {
     loadDocuments();
   }, [userId]);
 
-  const handleDelete = async (documentId: string, title: string) => {
-    if (!confirm(`Are you sure you want to delete "${title}"? This will remove all associated data and cannot be undone.`)) {
-      return;
+  // Refresh when refreshTrigger changes (triggered by upload completion)
+  useEffect(() => {
+    if (refreshTrigger !== undefined && refreshTrigger > 0) {
+      loadDocuments();
     }
+  }, [refreshTrigger]);
+
+  const handleDelete = async (documentId: string, title: string) => {
+    // Show confirmation toast
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${title}"? This will remove all associated data and cannot be undone.`
+    );
+
+    if (!confirmed) return;
 
     try {
       setDeleting(documentId);
-      console.log('[DocumentManager] Deleting document:', documentId);
+      toast.loading('Deleting document...', { id: `delete-${documentId}` });
 
       const response = await fetch(`/api/documents/${documentId}`, {
         method: 'DELETE',
       });
 
-      const data = await response.json();
-
-      if (response.ok) {
-        console.log('[DocumentManager] Document deleted successfully');
-        // Remove from local state
-        setDocuments(prev => prev.filter(doc => doc.id !== documentId));
-      } else {
-        alert(`Failed to delete document: ${data.error}`);
-        console.error('[DocumentManager] Delete failed:', data.error);
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Delete failed');
       }
+
+      toast.success('Document deleted successfully!', { id: `delete-${documentId}` });
+
+      // Remove from local state
+      setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
     } catch (error) {
       console.error('[DocumentManager] Error deleting document:', error);
-      alert('Network error. Please try again.');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      toast.error('Failed to delete document', {
+        id: `delete-${documentId}`,
+        description: errorMessage,
+      });
     } finally {
       setDeleting(null);
     }
@@ -92,133 +108,156 @@ export function DocumentManager({ userId }: DocumentManagerProps) {
     });
   };
 
-  const getSourceTypeIcon = (type: string) => {
+  const getSourceTypeConfig = (type: string) => {
     switch (type) {
       case 'audio':
-        return '🎤';
+        return {
+          icon: Mic,
+          label: 'Audio',
+          color: 'bg-[hsl(280,30%,75%)]',
+          bgColor: 'bg-[hsl(280,25%,95%)]',
+          borderColor: 'border-[hsl(280,25%,85%)]',
+          textColor: 'text-[hsl(280,30%,40%)]',
+        };
       case 'pdf':
-        return '📄';
+        return {
+          icon: FileText,
+          label: 'PDF',
+          color: 'bg-[hsl(15,40%,75%)]',
+          bgColor: 'bg-[hsl(15,35%,95%)]',
+          borderColor: 'border-[hsl(15,35%,85%)]',
+          textColor: 'text-[hsl(15,40%,40%)]',
+        };
       case 'markdown':
-        return '📝';
+        return {
+          icon: FileCode,
+          label: 'Markdown',
+          color: 'bg-[hsl(200,35%,75%)]',
+          bgColor: 'bg-[hsl(200,30%,95%)]',
+          borderColor: 'border-[hsl(200,30%,85%)]',
+          textColor: 'text-[hsl(200,35%,40%)]',
+        };
       default:
-        return '📎';
-    }
-  };
-
-  const getSourceTypeColor = (type: string) => {
-    switch (type) {
-      case 'audio':
-        return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200';
-      case 'pdf':
-        return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
-      case 'markdown':
-        return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
-      default:
-        return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200';
+        return {
+          icon: FileText,
+          label: 'Document',
+          color: 'bg-[hsl(214.3,25%,75%)]',
+          bgColor: 'bg-[hsl(214.3,25%,95%)]',
+          borderColor: 'border-[hsl(214.3,25%,85%)]',
+          textColor: 'text-[hsl(214.3,25%,40%)]',
+        };
     }
   };
 
   if (loading) {
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-          Document Library
-        </h2>
-        <div className="text-center text-gray-500 dark:text-gray-400 py-8">
-          <p>Loading documents...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
-          Document Library
-        </h2>
-        <div className="text-center text-red-500 py-8">
-          <p>{error}</p>
-          <button
-            onClick={loadDocuments}
-            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            Retry
-          </button>
+      <div className="bg-white backdrop-blur-sm rounded-2xl shadow-md p-6 border border-[hsl(214.3,25%,88%)]">
+        <div className="flex items-center justify-center py-12">
+          <div className="text-center">
+            <Loader2 className="w-8 h-8 animate-spin text-[hsl(214.3,28%,75%)] mx-auto mb-2" />
+            <p className="text-[hsl(214.3,20%,35%)]">Loading documents...</p>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+    <div className="bg-white backdrop-blur-sm rounded-2xl shadow-md p-6 border border-[hsl(214.3,25%,88%)]">
+      {/* Header */}
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-          Document Library
-        </h2>
+        <div className="flex items-center gap-2">
+          <div className="p-2 rounded-lg bg-[hsl(25,45%,82%)]">
+            <Library className="w-5 h-5 text-[hsl(214.3,25%,25%)]" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-[hsl(214.3,25%,25%)]">
+              Document Library
+            </h2>
+            <p className="text-xs text-[hsl(214.3,15%,45%)]">
+              {documents.length} {documents.length === 1 ? 'document' : 'documents'}
+            </p>
+          </div>
+        </div>
         <button
           onClick={loadDocuments}
-          className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-[hsl(214.3,20%,35%)] hover:text-[hsl(214.3,25%,25%)] rounded-lg hover:bg-[hsl(214.3,25%,94%)] transition-colors"
         >
-          🔄 Refresh
+          <RefreshCw className="w-4 h-4" />
+          Refresh
         </button>
       </div>
 
       {documents.length === 0 ? (
-        <div className="text-center text-gray-500 dark:text-gray-400 py-8">
-          <p className="text-lg mb-2">No documents yet</p>
-          <p className="text-sm">
+        <div className="text-center py-12">
+          <div className="w-16 h-16 rounded-full bg-[hsl(214.3,25%,94%)] flex items-center justify-center mx-auto mb-4">
+            <Library className="w-8 h-8 text-[hsl(214.3,28%,75%)]" />
+          </div>
+          <p className="text-lg font-medium text-[hsl(214.3,25%,25%)] mb-2">
+            No documents yet
+          </p>
+          <p className="text-sm text-[hsl(214.3,15%,45%)]">
             Upload your first document to get started!
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {documents.map((doc) => (
-            <div
-              key={doc.id}
-              className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:shadow-md transition-shadow"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-2xl">{getSourceTypeIcon(doc.source_type)}</span>
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                      {doc.title}
-                    </h3>
+        <div className="grid gap-4">
+          {documents.map((doc) => {
+            const config = getSourceTypeConfig(doc.source_type);
+            const Icon = config.icon;
+
+            return (
+              <div
+                key={doc.id}
+                className={`group p-4 rounded-xl border ${config.borderColor} ${config.bgColor} hover:shadow-lg transition-all`}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3 flex-1 min-w-0">
+                    <div className={`p-2 rounded-lg ${config.color} shrink-0`}>
+                      <Icon className="w-5 h-5 text-[hsl(214.3,25%,25%)]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold text-[hsl(214.3,25%,25%)] truncate mb-1">
+                        {doc.title}
+                      </h3>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        <span className={`text-xs px-2 py-1 rounded-full ${config.bgColor} ${config.textColor} border ${config.borderColor}`}>
+                          {config.label}
+                        </span>
+                        {doc.tags
+                          .filter((tag) => !tag.includes('processing') && !tag.includes('completed') && !tag.includes('failed'))
+                          .map((tag, idx) => (
+                            <span
+                              key={idx}
+                              className="text-xs px-2 py-1 rounded-full bg-[hsl(150,35%,90%)] text-[hsl(150,35%,30%)] border border-[hsl(150,35%,75%)]"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                      </div>
+                      <p className="text-xs text-[hsl(214.3,15%,45%)]">
+                        Uploaded {formatDate(doc.created_at)}
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    <span className={`text-xs px-2 py-1 rounded ${getSourceTypeColor(doc.source_type)}`}>
-                      {doc.source_type.toUpperCase()}
-                    </span>
-                    <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
-                      {doc.chunk_count} chunks
-                    </span>
-                    {doc.tags.filter(tag => !tag.includes('processing') && !tag.includes('completed')).map((tag, idx) => (
-                      <span
-                        key={idx}
-                        className="text-xs px-2 py-1 rounded bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Uploaded: {formatDate(doc.created_at)}
-                  </p>
+                  {/* Delete Button */}
+                  <button
+                    onClick={() => handleDelete(doc.id, doc.title)}
+                    disabled={deleting === doc.id}
+                    className="shrink-0 p-2 text-[hsl(0,45%,50%)] hover:bg-[hsl(0,45%,95%)] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Delete document"
+                  >
+                    {deleting === doc.id ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-5 h-5" />
+                    )}
+                  </button>
                 </div>
-
-                <button
-                  onClick={() => handleDelete(doc.id, doc.title)}
-                  disabled={deleting === doc.id}
-                  className="ml-4 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
-                >
-                  {deleting === doc.id ? 'Deleting...' : 'Delete'}
-                </button>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

@@ -1,8 +1,30 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Warm, subtle color scheme */
+  --background: hsl(214.3, 31.8%, 91.4%); /* Base warm gray-blue */
+  --foreground: hsl(214.3, 25%, 25%); /* Warm dark text */
+
+  /* Primary warm tones */
+  --primary: hsl(214.3, 28%, 75%); /* Warm blue-gray */
+  --primary-hover: hsl(214.3, 30%, 65%); /* Darker warm blue */
+  --accent: hsl(25, 45%, 82%); /* Warm peach */
+  --accent-hover: hsl(25, 50%, 72%); /* Darker warm peach */
+
+  /* Neutral warm tones */
+  --neutral-50: hsl(214.3, 25%, 97%);
+  --neutral-100: hsl(214.3, 25%, 94%);
+  --neutral-200: hsl(214.3, 25%, 88%);
+  --neutral-300: hsl(214.3, 20%, 75%);
+  --neutral-400: hsl(214.3, 15%, 60%);
+  --neutral-500: hsl(214.3, 15%, 45%);
+  --neutral-600: hsl(214.3, 20%, 35%);
+
+  /* Success/Error states - warm versions */
+  --success: hsl(150, 35%, 65%);
+  --success-light: hsl(150, 35%, 90%);
+  --error: hsl(0, 45%, 70%);
+  --error-light: hsl(0, 45%, 95%);
 }
 
 @theme inline {
@@ -10,17 +32,54 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Custom colors for Tailwind */
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-neutral-50: var(--neutral-50);
+  --color-neutral-100: var(--neutral-100);
+  --color-neutral-200: var(--neutral-200);
+  --color-neutral-300: var(--neutral-300);
+  --color-neutral-400: var(--neutral-400);
+  --color-neutral-500: var(--neutral-500);
+  --color-neutral-600: var(--neutral-600);
+  --color-success: var(--success);
+  --color-success-light: var(--success-light);
+  --color-error: var(--error);
+  --color-error-light: var(--error-light);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* Removed dark mode for cleaner, consistent warm design */
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar - warm theme */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--neutral-100);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--neutral-300);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--neutral-400);
 }

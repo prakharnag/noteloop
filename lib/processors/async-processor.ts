@@ -32,7 +32,13 @@ export async function processDocumentAsync(
     if (sourceType === 'audio') {
       // For audio, we need to save to temp file first (Whisper API requires file path)
       const { writeFile, unlink } = await import('fs/promises');
-      const tmpPath = `/tmp/${documentId}-audio`;
+
+      // Extract original filename and preserve extension for format detection
+      const originalFilename = filePath.split('/').pop() || 'audio.mp3';
+      const extension = originalFilename.split('.').pop() || 'mp3';
+      const tmpPath = `/tmp/${documentId}.${extension}`;
+
+      console.log(`[AsyncProcessor] Creating temp file: ${tmpPath} (original: ${originalFilename})`);
       await writeFile(tmpPath, fileBuffer);
 
       try {
