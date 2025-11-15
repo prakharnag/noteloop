@@ -93,6 +93,11 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
         return;
       }
 
+      // Async processing - always expect 'processing' status
+      if (data.status !== 'processing') {
+        console.warn('Unexpected status from API:', data.status);
+      }
+
       toast.success('File uploaded successfully!', { id: 'upload' });
       setUploadStatus({
         type: 'info',

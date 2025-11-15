@@ -11,7 +11,7 @@ import { processDocumentAsync } from '@/lib/processors/async-processor';
 import { createClient } from '@/lib/auth/supabase-server';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60; // Increased for Vercel - allows more time for validation and upload
+export const maxDuration = 30; // Only for upload, not processing
 
 export async function POST(request: NextRequest) {
   try {
@@ -66,56 +66,61 @@ export async function POST(request: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Quick validation: Only check file size and basic integrity
-    // Full validation happens during async processing to speed up upload
-    console.log(`[Ingest API] Performing quick file validation...`);
+    // Validate that we can extract text before uploading
+    // For PDF/Markdown: Quick validation
+    // For Audio: We'll validate during processing, but check file is readable
+    console.log(`[Ingest API] Validating file can be processed...`);
+    let canProcess = false;
     
-    if (buffer.length === 0) {
+    try {
+      if (sourceType === 'pdf') {
+        const { processPDFFromBuffer } = await import('@/lib/processors/document');
+        const processedContent = await processPDFFromBuffer(buffer, file.name);
+        if (!processedContent.text || processedContent.text.trim().length === 0) {
+          throw new Error('No text content could be extracted from this PDF. It may be an image-only PDF or corrupted file.');
+        }
+        canProcess = true;
+        console.log(`[Ingest API] PDF validation passed. Extracted ${processedContent.text.length} characters.`);
+      } else if (sourceType === 'markdown') {
+        const { processMarkdownFromBuffer } = await import('@/lib/processors/document');
+        const processedContent = await processMarkdownFromBuffer(buffer, file.name);
+        if (!processedContent.text || processedContent.text.trim().length === 0) {
+          throw new Error('No text content could be extracted from this Markdown file.');
+        }
+        canProcess = true;
+        console.log(`[Ingest API] Markdown validation passed. Extracted ${processedContent.text.length} characters.`);
+      } else if (sourceType === 'audio') {
+        // For audio, we can't do quick validation (transcription takes time)
+        // But we can check if the file buffer is valid
+        if (buffer.length === 0) {
+          throw new Error('Audio file appears to be empty or corrupted.');
+        }
+        canProcess = true;
+        console.log(`[Ingest API] Audio file validation passed. File size: ${buffer.length} bytes.`);
+      }
+    } catch (validationError) {
+      const errorMessage = validationError instanceof Error 
+        ? validationError.message 
+        : 'File validation failed. Unable to extract text from this file.';
+      
+      console.error(`[Ingest API] Validation failed:`, errorMessage);
       return NextResponse.json(
         {
           error: 'File validation failed',
-          details: 'File appears to be empty or corrupted.',
+          details: errorMessage,
         },
         { status: 400 }
       );
     }
 
-    // For PDF/Markdown: Do a quick validation to avoid storing unprocessable files
-    // This is faster than full extraction but still catches obvious issues
-    if (sourceType === 'pdf' || sourceType === 'markdown') {
-      try {
-        // Quick check: Try to read first few bytes to ensure file is readable
-        // Full extraction validation happens in async processor
-        if (sourceType === 'pdf' && buffer.length < 100) {
-          throw new Error('PDF file appears to be too small or corrupted.');
-        }
-        console.log(`[Ingest API] Quick validation passed for ${sourceType}. File size: ${buffer.length} bytes.`);
-      } catch (validationError) {
-        const errorMessage = validationError instanceof Error 
-          ? validationError.message 
-          : 'File validation failed.';
-        
-        console.error(`[Ingest API] Quick validation failed:`, errorMessage);
-        return NextResponse.json(
-          {
-            error: 'File validation failed',
-            details: errorMessage,
-          },
-          { status: 400 }
-        );
-      }
-    } else if (sourceType === 'audio') {
-      // For audio, just check file size
-      if (buffer.length < 100) {
-        return NextResponse.json(
-          {
-            error: 'File validation failed',
-            details: 'Audio file appears to be too small or corrupted.',
-          },
-          { status: 400 }
-        );
-      }
-      console.log(`[Ingest API] Audio file quick validation passed. File size: ${buffer.length} bytes.`);
+    if (!canProcess) {
+      return NextResponse.json(
+        {
+          error: 'Unable to process this file type',
+          details: 'File validation failed. Please ensure the file is not corrupted and contains extractable content.',
+        },
+        { status: 400 }
+      );
     }
 
     // Upload to Supabase Storage (only after validation passes)

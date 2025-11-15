@@ -39,7 +39,10 @@ function getS3Client(): S3Client {
     }
   }
 
-  console.log(`[Storage] S3 Client Config - Endpoint: ${endpoint}, Region: ${region}`);
+  // Only log S3 config in development
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[Storage] S3 Client Config - Endpoint: ${endpoint}, Region: ${region}`);
+  }
 
   return new S3Client({
     endpoint,
@@ -69,7 +72,11 @@ export async function uploadFile(
   const fileId = randomUUID();
   const filePath = `${userId}/${fileId}-${fileName}`;
 
-  console.log(`[Storage] Uploading file to: ${filePath}`);
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  if (!isProduction) {
+    console.log(`[Storage] Uploading file to: ${filePath}`);
+  }
 
   const s3Client = getS3Client();
   const contentType = getContentType(fileName);
@@ -87,7 +94,10 @@ export async function uploadFile(
     });
 
     await upload.done();
-    console.log(`[Storage] File uploaded successfully via S3 API`);
+    
+    if (!isProduction) {
+      console.log(`[Storage] File uploaded successfully via S3 API`);
+    }
 
     // Get public URL from Supabase
     const { data: urlData } = supabase.storage
@@ -130,29 +140,42 @@ function getStorageClient() {
 
 /**
  * Download file from Supabase Storage as Buffer
- * Uses Supabase SDK directly (proven to be faster and more reliable than S3 API on Vercel)
+ * Optimized for Render deployment with longer timeout and reduced logging
  */
 export async function downloadFile(filePath: string, maxRetries: number = 3): Promise<Buffer> {
-  console.log(`[Storage] Downloading file from: ${filePath}`);
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  if (!isProduction) {
+    console.log(`[Storage] Downloading file from: ${filePath}`);
+  }
 
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       if (attempt > 1) {
-        console.log(`[Storage] Retry attempt ${attempt}/${maxRetries} for: ${filePath}`);
-        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 2) * 1000));
+        const retryDelay = Math.pow(2, attempt - 2) * 1000;
+        if (!isProduction) {
+          console.log(`[Storage] Retry attempt ${attempt}/${maxRetries} after ${retryDelay}ms delay`);
+        }
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
 
-      console.log(`[Storage] Downloading via Supabase SDK (attempt ${attempt})...`);
+      if (!isProduction) {
+        console.log(`[Storage] Downloading via Supabase SDK (attempt ${attempt})...`);
+      }
+      
       const supabase = getStorageClient();
       
-      // Use Promise.race with timeout to prevent hanging
+      // Increased timeout for Render (60 seconds) - Render allows longer execution times
       const downloadTimeout = 60000; // 60 second timeout
+      
+      // Create the download promise
       const downloadPromise = supabase.storage
         .from(UPLOADS_BUCKET)
         .download(filePath);
       
+      // Create timeout promise
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => {
           reject(new Error(`Download timeout after ${downloadTimeout / 1000}s`));
@@ -171,12 +194,21 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
 
       const arrayBuffer = await data.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
-      console.log(`[Storage] ✓ File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+      
+      if (!isProduction) {
+        console.log(`[Storage] ✓ File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+      }
       
       return buffer;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+      
+      // Only log errors in production, full details in development
+      if (isProduction) {
+        console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+      } else {
+        console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError);
+      }
 
       // Don't retry for missing files
       if (lastError.message.includes('not found') || 
