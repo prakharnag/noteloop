@@ -96,11 +96,83 @@ export async function POST(request: NextRequest) {
       includeMetadata: true,
     });
 
+    // Handle case when no matches found
     if (matches.length === 0) {
-      return NextResponse.json({
-        answer: "I couldn't find any relevant information in your knowledge base to answer this question.",
-        sources: [],
-        query,
+      // Save user message first
+      await addMessage(currentConversationId, 'user', query);
+      
+      // Generate a friendly, helpful response using LLM
+      const friendlyNoResultsPrompt = `The user asked: "${query}"
+
+However, I couldn't find any relevant information in their knowledge base to answer this question.
+
+Please provide a friendly, helpful response that:
+1. Acknowledges that you couldn't find relevant information
+2. Suggests they might want to upload relevant documents
+3. Offers to help with a different question
+4. Is warm and conversational
+
+Keep it brief (2-3 sentences max).`;
+
+      const noResultsResponse = await getOpenAIClient().chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You are a helpful, friendly AI assistant.' },
+          { role: 'user', content: friendlyNoResultsPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 150,
+      });
+
+      const friendlyAnswer = noResultsResponse.choices[0]?.message?.content || 
+        "I couldn't find any relevant information in your knowledge base to answer this question. You might want to upload some documents related to this topic, or feel free to ask me something else!";
+
+      // Save the friendly response
+      await addMessage(currentConversationId, 'assistant', friendlyAnswer, []);
+
+      // Return as streaming response for consistency
+      const encoder = new TextEncoder();
+      const readableStream = new ReadableStream({
+        async start(controller) {
+          try {
+            // Send metadata
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({
+                type: 'metadata',
+                conversation_id: currentConversationId,
+                chunks_used: 0
+              })}\n\n`)
+            );
+
+            // Stream the friendly message word by word for better UX
+            const words = friendlyAnswer.split(' ');
+            for (let i = 0; i < words.length; i++) {
+              const word = words[i] + (i < words.length - 1 ? ' ' : '');
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ type: 'token', content: word })}\n\n`)
+              );
+              // Small delay for streaming effect
+              await new Promise(resolve => setTimeout(resolve, 20));
+            }
+
+            // Send completion
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
+            );
+            controller.close();
+          } catch (error) {
+            console.error('[Query API] Error streaming no-results response:', error);
+            controller.close();
+          }
+        },
+      });
+
+      return new Response(readableStream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
       });
     }
 
@@ -152,11 +224,22 @@ export async function POST(request: NextRequest) {
         ).join('\n')}`
       : '';
 
+    // Check if we have low-quality matches (low relevance scores)
+    const lowQualityThreshold = 0.7; // Adjust based on your needs
+    const highQualityChunks = contextChunks.filter(c => (c.score || 0) >= lowQualityThreshold);
+    const hasLowQualityResults = highQualityChunks.length === 0 && contextChunks.length > 0;
+
     const systemPrompt = `You are a helpful AI assistant that answers questions based on the user's personal knowledge base.
 
-Use the provided context to answer the question. If the context doesn't contain enough information to answer the question, say so honestly.
+Use the provided context to answer the question. 
+
+IMPORTANT: If the context doesn't contain enough information to fully answer the question, or if the information is not very relevant, be honest and friendly about it. Say something like:
+- "Based on the information I found, [partial answer if any], but I don't have complete information about this. You might want to upload more relevant documents."
+- "I found some information, but it's not very specific to your question. [Share what you found if useful], but you may need to add more documents to get a complete answer."
 
 You also have access to previous conversation history (AI Memory), which you can reference to provide continuity across conversations.
+
+${hasLowQualityResults ? 'NOTE: The search results have low relevance scores, so the information may not be very relevant to the question. Be honest about this.' : ''}
 
 Context from knowledge base:
 ${context}${aiMemoryContext}`;

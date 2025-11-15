@@ -254,16 +254,18 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
 
-      toast.error('Failed to get response', {
-        description: errorMessage,
+      // Show a friendly error message
+      toast.error('Unable to process your question', {
+        description: 'Please try again in a moment. If the problem persists, check your connection.',
       });
 
+      // Update the assistant message with a friendly error message
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMessageId
             ? {
                 ...msg,
-                content: '❌ Sorry, I encountered an error. Please try again.',
+                content: "I'm sorry, I encountered an issue processing your question. Please try asking again, or rephrase your question. If the problem continues, it might help to check your internet connection.",
               }
             : msg
         )

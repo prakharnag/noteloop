@@ -109,12 +109,17 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
             description: 'Your document is ready to use',
           });
           setProcessingDocumentId(null);
+          // Show success message briefly, then reset
           setUploadStatus({
             type: 'success',
             message: `All set! Your document is ready to use.`,
           });
           // Trigger document library refresh
           onUploadComplete?.();
+          // Reset button after 3 seconds
+          setTimeout(() => {
+            setUploadStatus(null);
+          }, 3000);
           return;
         } else if (data.status === 'failed') {
           toast.error('Something went wrong', {
@@ -183,6 +188,10 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
                     message: `All set! Your document is ready to use.`,
                   });
                   onUploadComplete?.();
+                  // Reset button after 3 seconds
+                  setTimeout(() => {
+                    setUploadStatus(null);
+                  }, 3000);
                   return;
                 }
               }
@@ -266,65 +275,43 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
           </label>
         </div>
 
-        {/* Upload Button */}
+        {/* Upload Button with Status Messages */}
         <button
           onClick={handleUpload}
           disabled={!file || uploading || processingDocumentId !== null}
-          className="w-full bg-[hsl(25,45%,82%)] hover:bg-[hsl(25,50%,72%)] disabled:bg-[hsl(214.3,15%,60%)] text-[hsl(214.3,25%,25%)] font-medium py-3 rounded-xl transition-all disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md"
+          className={`w-full font-medium py-3 rounded-xl transition-all disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md ${
+            uploadStatus?.type === 'success'
+              ? 'bg-[hsl(150,35%,82%)] hover:bg-[hsl(150,40%,72%)] text-[hsl(150,35%,25%)]'
+              : uploadStatus?.type === 'error'
+              ? 'bg-[hsl(0,45%,85%)] hover:bg-[hsl(0,50%,75%)] text-[hsl(0,45%,30%)]'
+              : uploading || processingDocumentId
+              ? 'bg-[hsl(214.3,28%,75%)] text-[hsl(214.3,25%,25%)]'
+              : 'bg-[hsl(25,45%,82%)] hover:bg-[hsl(25,50%,72%)] disabled:bg-[hsl(214.3,15%,60%)] text-[hsl(214.3,25%,25%)]'
+          }`}
         >
           {uploading ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin" />
-              Uploading...
+              <span>Uploading...</span>
             </>
-          ) : processingDocumentId ? (
+          ) : uploadStatus ? (
             <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              Processing...
+              {uploadStatus.type === 'success' ? (
+                <CheckCircle2 className="w-5 h-5" />
+              ) : uploadStatus.type === 'error' ? (
+                <XCircle className="w-5 h-5" />
+              ) : (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              )}
+              <span className="text-sm">{uploadStatus.message}</span>
             </>
           ) : (
             <>
               <Upload className="w-5 h-5" />
-              Upload
+              <span>Upload</span>
             </>
           )}
         </button>
-
-        {/* Status Message */}
-        {uploadStatus && (
-          <div
-            className={`p-4 rounded-xl border ${
-              uploadStatus.type === 'success'
-                ? 'bg-[hsl(150,35%,90%)] border-[hsl(150,35%,75%)]'
-                : uploadStatus.type === 'error'
-                ? 'bg-[hsl(0,45%,95%)] border-[hsl(0,45%,80%)]'
-                : 'bg-[hsl(214.3,25%,94%)] border-[hsl(214.3,25%,88%)]'
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              {uploadStatus.type === 'success' && (
-                <CheckCircle2 className="w-5 h-5 text-[hsl(150,35%,40%)] shrink-0 mt-0.5" />
-              )}
-              {uploadStatus.type === 'error' && (
-                <XCircle className="w-5 h-5 text-[hsl(0,45%,50%)] shrink-0 mt-0.5" />
-              )}
-              {uploadStatus.type === 'info' && (
-                <Loader2 className="w-5 h-5 text-[hsl(214.3,28%,75%)] shrink-0 mt-0.5 animate-spin" />
-              )}
-              <p
-                className={`text-sm ${
-                  uploadStatus.type === 'success'
-                    ? 'text-[hsl(150,35%,30%)]'
-                    : uploadStatus.type === 'error'
-                    ? 'text-[hsl(0,45%,40%)]'
-                    : 'text-[hsl(214.3,25%,25%)]'
-                }`}
-              >
-                {uploadStatus.message}
-              </p>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Info */}

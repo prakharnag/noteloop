@@ -117,6 +117,7 @@ export async function processAudio(
   }
 }
 
+
 /**
  * Process audio from buffer (useful for direct uploads)
  */
@@ -129,7 +130,6 @@ export async function processAudioFromBuffer(
     console.log(`[AudioProcessor] Processing audio buffer: ${filename}`);
 
     // Create a file-like object from buffer
-    // Convert Buffer to Uint8Array for compatibility with Blob
     const uint8Array = new Uint8Array(buffer);
     const blob = new Blob([uint8Array], { type: getAudioMimeType(filename) });
     const file = new File([blob], filename, {
@@ -152,6 +152,11 @@ export async function processAudioFromBuffer(
       processor: 'whisper-1',
       filename,
       segments: transcription.segments?.length || 0,
+      timestamp_segments: transcription.segments?.map((seg: any) => ({
+        start: seg.start,
+        end: seg.end,
+        text: seg.text,
+      })),
     };
 
     return {
