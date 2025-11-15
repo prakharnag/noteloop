@@ -12,36 +12,20 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
--- Meetings table - tracks live audio sessions
--- Each meeting can have multiple audio segments that are transcribed
-CREATE TABLE IF NOT EXISTS meetings (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  start_time TIMESTAMP WITH TIME ZONE NOT NULL,
-  end_time TIMESTAMP WITH TIME ZONE,
-  status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'failed')) DEFAULT 'active',
-  total_duration INTEGER, -- in seconds
-  metadata JSONB DEFAULT '{}'::jsonb
-);
-
 -- Documents table
--- For meetings, source_uri will be NULL and we link to meetings table
 CREATE TABLE IF NOT EXISTS documents (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  meeting_id UUID REFERENCES meetings(id) ON DELETE CASCADE, -- NULL for non-meeting documents
   title TEXT NOT NULL,
   source_type TEXT NOT NULL CHECK (source_type IN ('audio', 'pdf', 'markdown')),
-  source_uri TEXT, -- file path/URL, NULL for live meetings
+  source_uri TEXT, -- file path/URL
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   ingested_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   tags TEXT[] DEFAULT '{}'::text[]
 );
 
 -- Chunks table
--- Stores processed text chunks from documents/meetings with embeddings
--- For live meetings, chunks are created in real-time as audio is transcribed
+-- Stores processed text chunks from documents with embeddings
 CREATE TABLE IF NOT EXISTS chunks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -50,19 +34,14 @@ CREATE TABLE IF NOT EXISTS chunks (
   embedding_id TEXT NOT NULL, -- Reference to Pinecone vector ID
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   processed_flag BOOLEAN DEFAULT FALSE, -- For async processing
-  metadata JSONB DEFAULT '{}'::jsonb, -- Stores timestamp_start, timestamp_end for meeting chunks
+  metadata JSONB DEFAULT '{}'::jsonb, -- Stores additional chunk metadata
   UNIQUE(document_id, chunk_index)
 );
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
-CREATE INDEX IF NOT EXISTS idx_meetings_user_id ON meetings(user_id);
-CREATE INDEX IF NOT EXISTS idx_meetings_start_time ON meetings(start_time);
-CREATE INDEX IF NOT EXISTS idx_meetings_status ON meetings(status);
-
 CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
-CREATE INDEX IF NOT EXISTS idx_documents_meeting_id ON documents(meeting_id);
 CREATE INDEX IF NOT EXISTS idx_documents_source_type ON documents(source_type);
 CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_tags ON documents USING GIN(tags);
@@ -96,7 +75,6 @@ CREATE OR REPLACE TRIGGER on_auth_user_created
 
 -- Enable Row Level Security (RLS) - Supabase best practice
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE meetings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chunks ENABLE ROW LEVEL SECURITY;
 
@@ -105,9 +83,6 @@ ALTER TABLE chunks ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can view their own data" ON users
   FOR SELECT USING (true);
-
-CREATE POLICY "Users can view their own meetings" ON meetings
-  FOR ALL USING (true);
 
 CREATE POLICY "Users can view their own documents" ON documents
   FOR ALL USING (true);

@@ -51,7 +51,46 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Upload failed');
+        // Handle validation errors with user-friendly messages
+        let userFriendlyMessage = 'Upload failed';
+        let toastDescription = data.details || data.error || 'Please try again';
+        
+        if (response.status === 400) {
+          // File validation failed
+          if (data.details?.includes('No text content could be extracted')) {
+            userFriendlyMessage = 'Issue with file';
+            toastDescription = 'Unable to extract text from this file. It may be an image-only PDF, corrupted file, or unsupported format. Please try a different file.';
+          } else if (data.details?.includes('empty or corrupted')) {
+            userFriendlyMessage = 'Issue with file';
+            toastDescription = 'The file appears to be empty or corrupted. Please check the file and try again.';
+          } else if (data.error === 'File validation failed') {
+            userFriendlyMessage = 'Issue with file';
+            toastDescription = data.details || 'The file could not be processed. Please ensure it\'s not corrupted and contains extractable content.';
+          } else {
+            userFriendlyMessage = 'Upload failed';
+            toastDescription = data.details || data.error || 'Please try again';
+          }
+        } else {
+          userFriendlyMessage = 'Upload failed';
+          toastDescription = data.details || data.error || 'Please try again';
+        }
+
+        toast.error(userFriendlyMessage, {
+          id: 'upload',
+          description: toastDescription,
+        });
+
+        setUploadStatus({
+          type: 'error',
+          message: toastDescription,
+        });
+        
+        // Reset button after 5 seconds
+        setTimeout(() => {
+          setUploadStatus(null);
+        }, 5000);
+        
+        return;
       }
 
       toast.success('File uploaded successfully!', { id: 'upload' });
@@ -77,13 +116,18 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
 
       toast.error('Upload failed', {
         id: 'upload',
-        description: errorMessage,
+        description: 'An unexpected error occurred. Please try again.',
       });
 
       setUploadStatus({
         type: 'error',
-        message: errorMessage,
+        message: 'An unexpected error occurred. Please try again.',
       });
+      
+      // Reset button after 5 seconds
+      setTimeout(() => {
+        setUploadStatus(null);
+      }, 5000);
     } finally {
       setUploading(false);
     }
@@ -99,6 +143,21 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
         const response = await fetch(`/api/ingest/status/${documentId}`);
 
         if (!response.ok) {
+          // If document not found (404), it may have been deleted due to processing failure
+          if (response.status === 404) {
+            toast.error('Processing failed', {
+              description: 'The file could not be processed. It may be corrupted or in an unsupported format.',
+            });
+            setProcessingDocumentId(null);
+            setUploadStatus({
+              type: 'error',
+              message: 'File could not be processed. Please try a different file.',
+            });
+            setTimeout(() => {
+              setUploadStatus(null);
+            }, 5000);
+            return;
+          }
           throw new Error('Failed to check status');
         }
 
@@ -122,14 +181,24 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
           }, 3000);
           return;
         } else if (data.status === 'failed') {
-          toast.error('Something went wrong', {
-            description: data.message || 'Please try uploading again',
+          // Determine specific error message
+          let errorMessage = data.message || 'Please try uploading again';
+          if (data.message?.includes('No text content extracted')) {
+            errorMessage = 'Unable to extract text from this file. It may be an image-only PDF, corrupted file, or unsupported format.';
+          }
+          
+          toast.error('Processing failed', {
+            description: errorMessage,
           });
           setProcessingDocumentId(null);
           setUploadStatus({
             type: 'error',
-            message: `Oops! ${data.message || 'Please try uploading again'}`,
+            message: errorMessage,
           });
+          // Reset button after 5 seconds to allow user to try again
+          setTimeout(() => {
+            setUploadStatus(null);
+          }, 5000);
           return;
         }
 
@@ -208,6 +277,10 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
               type: 'info',
               message: 'Processing may still be in progress. Check the document library or refresh the page.',
             });
+            // Reset button after 5 seconds
+            setTimeout(() => {
+              setUploadStatus(null);
+            }, 5000);
             // Still trigger refresh in case it's done
             onUploadComplete?.();
           }, 2000);
@@ -221,6 +294,10 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
           type: 'error',
           message: 'Status check failed. Please refresh the page to see if processing completed.',
         });
+        // Reset button after 5 seconds
+        setTimeout(() => {
+          setUploadStatus(null);
+        }, 5000);
         // Still trigger refresh in case it's done
         onUploadComplete?.();
       }

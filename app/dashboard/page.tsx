@@ -89,39 +89,39 @@ export default function AppPage() {
 
       {/* Main Content */}
       <div className="flex-1 overflow-auto">
-        <div className="container mx-auto px-4 py-8 max-w-7xl">
+        <div className="container mx-auto px-3 sm:px-4 py-6 sm:py-8 max-w-7xl">
           {/* Header */}
-          <header className="mb-8">
-            <div className="flex justify-between items-center mb-6 bg-white backdrop-blur-sm rounded-2xl px-6 py-4 shadow-md border border-[hsl(214.3,25%,88%)]">
-              <div className="flex items-center gap-3">
+          <header className="mb-6 sm:mb-8">
+            <div className="flex justify-between items-center mb-6 bg-white backdrop-blur-sm rounded-2xl px-3 sm:px-6 py-3 sm:py-4 shadow-md border border-[hsl(214.3,25%,88%)] gap-2 sm:gap-4 overflow-hidden">
+              <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
                 {/* Mobile Menu Button */}
                 <button
                   onClick={() => setSidebarOpen(!sidebarOpen)}
-                  className="lg:hidden p-2 hover:bg-[hsl(214.3,25%,94%)] rounded-lg transition-colors"
+                  className="lg:hidden p-1.5 sm:p-2 hover:bg-[hsl(214.3,25%,94%)] rounded-lg transition-colors shrink-0"
                 >
                   {sidebarOpen ? (
-                    <X className="w-6 h-6 text-[hsl(214.3,20%,35%)]" />
+                    <X className="w-5 h-5 sm:w-6 sm:h-6 text-[hsl(214.3,20%,35%)]" />
                   ) : (
-                    <Menu className="w-6 h-6 text-[hsl(214.3,20%,35%)]" />
+                    <Menu className="w-5 h-5 sm:w-6 sm:h-6 text-[hsl(214.3,20%,35%)]" />
                   )}
                 </button>
 
-                <div className="w-10 h-10 rounded-full bg-[hsl(214.3,28%,75%)] flex items-center justify-center text-[hsl(214.3,25%,25%)] font-bold">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-[hsl(214.3,28%,75%)] flex items-center justify-center text-[hsl(214.3,25%,25%)] font-bold shrink-0 text-sm sm:text-base">
                   N
                 </div>
-                <div>
-                  <h1 className="text-2xl font-bold text-[hsl(214.3,25%,25%)]">
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-lg sm:text-2xl font-bold text-[hsl(214.3,25%,25%)] truncate">
                     Noteloop
                   </h1>
-                  <p className="text-sm text-[hsl(214.3,20%,35%)]">
+                  <p className="text-xs sm:text-sm text-[hsl(214.3,20%,35%)] hidden sm:block">
                     Your Second Brain AI
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 sm:gap-4 shrink-0">
                 {userEmail && (
                   <div className="hidden md:block text-right">
-                    <p className="text-sm font-medium text-[hsl(214.3,25%,25%)]">
+                    <p className="text-sm font-medium text-[hsl(214.3,25%,25%)] truncate max-w-[150px]">
                       {userEmail}
                     </p>
                     <p className="text-xs text-[hsl(214.3,15%,45%)]">
@@ -131,7 +131,7 @@ export default function AppPage() {
                 )}
                 <button
                   onClick={handleSignOut}
-                  className="px-4 py-2 text-sm font-medium text-[hsl(214.3,20%,35%)] hover:text-[hsl(214.3,25%,25%)] transition-colors rounded-lg hover:bg-[hsl(214.3,25%,94%)]"
+                  className="px-2 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-[hsl(214.3,20%,35%)] hover:text-[hsl(214.3,25%,25%)] transition-colors rounded-lg hover:bg-[hsl(214.3,25%,94%)] whitespace-nowrap"
                 >
                   Sign Out
                 </button>

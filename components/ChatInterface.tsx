@@ -241,7 +241,7 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
                   )
                 );
               } else if (data.type === 'done') {
-                toast.success('Response complete!');
+                // Don't show toast - response is already visible in chat
               } else if (data.type === 'error') {
                 throw new Error(data.error);
               }

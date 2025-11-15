@@ -159,13 +159,13 @@ Query your knowledge base with natural language.
 ```json
 {
   "user_id": "uuid",
-  "query": "What were the key points from yesterday's meeting?",
+  "query": "What were the key points from the uploaded documents?",
   "filters": {
     "time_range": {
       "start": "2024-01-01T00:00:00Z",
       "end": "2024-01-31T23:59:59Z"
     },
-    "tags": ["meeting"],
+    "tags": ["project-x"],
     "source_types": ["audio"]
   }
 }
@@ -207,9 +207,10 @@ noteloop/
 See `lib/db/schema.sql` for the complete schema. Key tables:
 
 - **users**: User accounts
-- **meetings**: Live audio session tracking
 - **documents**: Uploaded files and their metadata
 - **chunks**: Processed text chunks with embeddings
+- **conversations**: Chat conversation sessions
+- **messages**: Chat messages within conversations
 
 ## Environment Variables Reference
 

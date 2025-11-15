@@ -190,23 +190,56 @@ export async function processDocumentAsync(
     console.error(`[AsyncProcessor] Error processing document ${documentId}:`, error);
     console.error(`[AsyncProcessor] Error details:`, error instanceof Error ? error.stack : error);
 
-    // Mark document as failed - ensure this always happens
+    // Clean up: Delete from storage and database since processing failed
     try {
       const supabase = getSupabaseClient();
-      const { error: updateError } = await supabase
+      
+      // Get document to find storage path before deleting
+      const { data: document } = await supabase
         .from('documents')
-        .update({
-          tags: ['failed']
-        })
+        .select('source_uri')
+        .eq('id', documentId)
+        .single();
+      
+      // Delete file from storage if it exists
+      if (document?.source_uri) {
+        try {
+          const { deleteFile } = await import('@/lib/storage/supabase-storage');
+          await deleteFile(document.source_uri);
+          console.log(`[AsyncProcessor] Deleted storage file: ${document.source_uri}`);
+        } catch (storageError) {
+          console.error(`[AsyncProcessor] Failed to delete storage file:`, storageError);
+        }
+      }
+      
+      // Delete document record from database
+      const { error: deleteError } = await supabase
+        .from('documents')
+        .delete()
         .eq('id', documentId);
       
-      if (updateError) {
-        console.error(`[AsyncProcessor] Failed to mark document as failed:`, updateError);
+      if (deleteError) {
+        console.error(`[AsyncProcessor] Failed to delete document record:`, deleteError);
+        // Fallback: Mark as failed if deletion fails
+        await supabase
+          .from('documents')
+          .update({ tags: ['failed'] })
+          .eq('id', documentId);
       } else {
-        console.log(`[AsyncProcessor] Document ${documentId} marked as failed`);
+        console.log(`[AsyncProcessor] Deleted document record: ${documentId}`);
       }
-    } catch (markError) {
-      console.error(`[AsyncProcessor] Critical error marking document as failed:`, markError);
+    } catch (cleanupError) {
+      console.error(`[AsyncProcessor] Critical error during cleanup:`, cleanupError);
+      // Last resort: Try to mark as failed
+      try {
+        const supabase = getSupabaseClient();
+        await supabase
+          .from('documents')
+          .update({ tags: ['failed'] })
+          .eq('id', documentId);
+      } catch {
+        // Ignore if this also fails
+      }
     }
 
     throw error;

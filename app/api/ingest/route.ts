@@ -66,7 +66,64 @@ export async function POST(request: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Upload to Supabase Storage
+    // Validate that we can extract text before uploading
+    // For PDF/Markdown: Quick validation
+    // For Audio: We'll validate during processing, but check file is readable
+    console.log(`[Ingest API] Validating file can be processed...`);
+    let canProcess = false;
+    
+    try {
+      if (sourceType === 'pdf') {
+        const { processPDFFromBuffer } = await import('@/lib/processors/document');
+        const processedContent = await processPDFFromBuffer(buffer, file.name);
+        if (!processedContent.text || processedContent.text.trim().length === 0) {
+          throw new Error('No text content could be extracted from this PDF. It may be an image-only PDF or corrupted file.');
+        }
+        canProcess = true;
+        console.log(`[Ingest API] PDF validation passed. Extracted ${processedContent.text.length} characters.`);
+      } else if (sourceType === 'markdown') {
+        const { processMarkdownFromBuffer } = await import('@/lib/processors/document');
+        const processedContent = await processMarkdownFromBuffer(buffer, file.name);
+        if (!processedContent.text || processedContent.text.trim().length === 0) {
+          throw new Error('No text content could be extracted from this Markdown file.');
+        }
+        canProcess = true;
+        console.log(`[Ingest API] Markdown validation passed. Extracted ${processedContent.text.length} characters.`);
+      } else if (sourceType === 'audio') {
+        // For audio, we can't do quick validation (transcription takes time)
+        // But we can check if the file buffer is valid
+        if (buffer.length === 0) {
+          throw new Error('Audio file appears to be empty or corrupted.');
+        }
+        canProcess = true;
+        console.log(`[Ingest API] Audio file validation passed. File size: ${buffer.length} bytes.`);
+      }
+    } catch (validationError) {
+      const errorMessage = validationError instanceof Error 
+        ? validationError.message 
+        : 'File validation failed. Unable to extract text from this file.';
+      
+      console.error(`[Ingest API] Validation failed:`, errorMessage);
+      return NextResponse.json(
+        {
+          error: 'File validation failed',
+          details: errorMessage,
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!canProcess) {
+      return NextResponse.json(
+        {
+          error: 'Unable to process this file type',
+          details: 'File validation failed. Please ensure the file is not corrupted and contains extractable content.',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Upload to Supabase Storage (only after validation passes)
     const storageUploadStartTime = Date.now();
     console.log(`[Ingest API] Uploading file to Supabase Storage...`);
     const { path: storagePath, publicUrl } = await uploadFile(
@@ -94,12 +151,23 @@ export async function POST(request: NextRequest) {
     console.log(`[Ingest API] Total upload and setup time: ${(totalUploadDuration / 1000).toFixed(2)} seconds`);
 
     // Start async processing (don't await - let it run in background)
+    // For PDF/Markdown, we already validated text extraction, so processing should succeed
+    // For Audio, validation happens during transcription
     processDocumentAsync(document.id, storagePath, sourceType, userId)
       .then(() => {
         console.log(`[Ingest API] ✓ Background processing completed for: ${document.id}`);
       })
-      .catch((error) => {
+      .catch(async (error) => {
         console.error(`[Ingest API] ✗ Background processing failed for: ${document.id}`, error);
+        
+        // If processing fails after upload, clean up: delete from storage and mark as failed
+        try {
+          const { deleteFile } = await import('@/lib/storage/supabase-storage');
+          await deleteFile(storagePath);
+          console.log(`[Ingest API] Cleaned up storage file: ${storagePath}`);
+        } catch (cleanupError) {
+          console.error(`[Ingest API] Failed to clean up storage file:`, cleanupError);
+        }
       });
 
     // Return immediately with processing status

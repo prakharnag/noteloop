@@ -36,9 +36,13 @@ export async function GET(request: NextRequest) {
       throw new Error(`Failed to fetch documents: ${error.message}`);
     }
 
-    // Get chunk count for each document
+    // Filter out failed documents and get chunk count for each document
+    const validDocuments = (documents || []).filter(
+      (doc) => !doc.tags.includes('failed')
+    );
+
     const documentsWithChunkCount = await Promise.all(
-      (documents || []).map(async (doc) => {
+      validDocuments.map(async (doc) => {
         const { count } = await supabase
           .from('chunks')
           .select('*', { count: 'exact', head: true })
@@ -51,7 +55,7 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    console.log(`[Documents API] Found ${documentsWithChunkCount.length} documents`);
+    console.log(`[Documents API] Found ${documentsWithChunkCount.length} valid documents (${(documents || []).length - validDocuments.length} failed documents excluded)`);
 
     return NextResponse.json({
       documents: documentsWithChunkCount,

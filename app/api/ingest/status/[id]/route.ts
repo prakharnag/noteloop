@@ -49,12 +49,13 @@ export async function GET(
     }
 
     // Determine status from tags and chunks
-    // If chunks exist, consider it completed even if tag isn't set yet
+    // Only consider completed if BOTH chunks exist AND 'completed' tag is set
+    // The 'completed' tag is only set after successful Pinecone upsert
     let status: 'processing' | 'completed' | 'failed';
     if (document.tags.includes('failed')) {
       status = 'failed';
-    } else if (document.tags.includes('completed') || (chunksCount && chunksCount > 0)) {
-      // Completed if tag is set OR if chunks exist (more reliable)
+    } else if (document.tags.includes('completed') && chunksCount && chunksCount > 0) {
+      // Completed only if tag is set AND chunks exist (ensures Pinecone storage is done)
       status = 'completed';
     } else {
       status = 'processing';
@@ -73,7 +74,9 @@ export async function GET(
         status === 'completed'
           ? `Processing complete. ${chunksCount} chunks created.`
           : status === 'failed'
-          ? 'Processing failed. Please try uploading again.'
+          ? document.tags.includes('no_text')
+            ? 'No text content extracted from file'
+            : 'Processing failed. Please try uploading again.'
           : 'Processing in progress...',
     });
 

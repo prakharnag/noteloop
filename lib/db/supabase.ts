@@ -95,51 +95,10 @@ export type Database = {
           }
         ];
       };
-      meetings: {
-        Row: {
-          id: string;
-          user_id: string;
-          title: string;
-          start_time: string;
-          end_time: string | null;
-          status: 'active' | 'completed' | 'failed';
-          total_duration: number | null;
-          metadata: Record<string, any>;
-        };
-        Insert: {
-          id?: string;
-          user_id: string;
-          title: string;
-          start_time: string;
-          end_time?: string | null;
-          status?: 'active' | 'completed' | 'failed';
-          total_duration?: number | null;
-          metadata?: Record<string, any>;
-        };
-        Update: {
-          id?: string;
-          user_id?: string;
-          title?: string;
-          start_time?: string;
-          end_time?: string | null;
-          status?: 'active' | 'completed' | 'failed';
-          total_duration?: number | null;
-          metadata?: Record<string, any>;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "meetings_user_id_fkey";
-            columns: ["user_id"];
-            referencedRelation: "users";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
       documents: {
         Row: {
           id: string;
           user_id: string;
-          meeting_id: string | null;
           title: string;
           source_type: 'audio' | 'pdf' | 'markdown';
           source_uri: string | null;
@@ -150,7 +109,6 @@ export type Database = {
         Insert: {
           id?: string;
           user_id: string;
-          meeting_id?: string | null;
           title: string;
           source_type: 'audio' | 'pdf' | 'markdown';
           source_uri?: string | null;
@@ -161,7 +119,6 @@ export type Database = {
         Update: {
           id?: string;
           user_id?: string;
-          meeting_id?: string | null;
           title?: string;
           source_type?: 'audio' | 'pdf' | 'markdown';
           source_uri?: string | null;
@@ -174,12 +131,6 @@ export type Database = {
             foreignKeyName: "documents_user_id_fkey";
             columns: ["user_id"];
             referencedRelation: "users";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "documents_meeting_id_fkey";
-            columns: ["meeting_id"];
-            referencedRelation: "meetings";
             referencedColumns: ["id"];
           }
         ];
@@ -269,53 +220,6 @@ export async function createUser(email: string, name: string) {
   return data;
 }
 
-/**
- * Helper function to create a new meeting
- */
-export async function createMeeting(
-  userId: string,
-  title: string,
-  startTime: Date
-) {
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase
-    .from('meetings')
-    .insert({
-      user_id: userId,
-      title,
-      start_time: startTime.toISOString(),
-      status: 'active',
-    })
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
-}
-
-/**
- * Helper function to complete a meeting
- */
-export async function completeMeeting(
-  meetingId: string,
-  endTime: Date,
-  totalDuration: number
-) {
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase
-    .from('meetings')
-    .update({
-      end_time: endTime.toISOString(),
-      status: 'completed',
-      total_duration: totalDuration,
-    })
-    .eq('id', meetingId)
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
-}
 
 /**
  * Helper function to create a document
