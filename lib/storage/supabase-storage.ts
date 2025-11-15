@@ -129,115 +129,124 @@ function getStorageClient() {
 }
 
 /**
- * Download file from Supabase Storage as Buffer using S3-compatible API
+ * Download file from Supabase Storage as Buffer
+ * Tries S3 API first, falls back to Supabase SDK if S3 fails
  */
 export async function downloadFile(filePath: string, maxRetries: number = 3): Promise<Buffer> {
-  const downloadTimeout = 60000; // 1 minute timeout for download
+  const downloadTimeout = 30000; // 30 second timeout for download (reduced for faster failure)
 
   console.log(`[Storage] Downloading file from: ${filePath}`);
 
   let lastError: Error | null = null;
 
+  // Try S3 API first
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       if (attempt > 1) {
-        console.log(`[Storage] Retry attempt ${attempt}/${maxRetries} for: ${filePath}`);
+        console.log(`[Storage] S3 retry attempt ${attempt}/${maxRetries} for: ${filePath}`);
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 2) * 1000));
       }
 
       console.log(`[Storage] Starting S3 download (attempt ${attempt})...`);
       const s3Client = getS3Client();
 
-      // Create abort controller for the S3 request
-      const abortController = new AbortController();
-      const timeoutId = setTimeout(() => {
-        console.log(`[Storage] Timeout reached, aborting S3 request...`);
-        abortController.abort();
-      }, downloadTimeout);
+      console.log(`[Storage] S3 Key: ${filePath}`);
+      console.log(`[Storage] Bucket: ${UPLOADS_BUCKET}`);
+      
+      const command = new GetObjectCommand({
+        Bucket: UPLOADS_BUCKET,
+        Key: filePath,
+      });
+      
+      console.log(`[Storage] Sending GetObjectCommand with ${downloadTimeout}ms timeout...`);
+      
+      // Use Promise.race with aggressive timeout
+      const sendPromise = s3Client.send(command);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          console.log(`[Storage] ⚠️ S3 request timeout after ${downloadTimeout / 1000}s - will try Supabase SDK fallback`);
+          reject(new Error(`S3 request timeout after ${downloadTimeout / 1000}s`));
+        }, downloadTimeout);
+      });
+      
+      const response = await Promise.race([sendPromise, timeoutPromise]);
+      console.log(`[Storage] ✓ S3 GetObjectCommand completed, response received`);
 
-      try {
-        // According to AWS SDK docs, the Key should be the exact path as stored
-        // The SDK handles encoding internally. Don't pre-encode it.
-        // The filePath is stored exactly as: userId/fileId-filename (with spaces preserved)
-        console.log(`[Storage] S3 Key: ${filePath}`);
-        console.log(`[Storage] Bucket: ${UPLOADS_BUCKET}`);
-        console.log(`[Storage] Sending GetObjectCommand...`);
-        
-        const command = new GetObjectCommand({
-          Bucket: UPLOADS_BUCKET,
-          Key: filePath, // Use exact path as stored - AWS SDK handles encoding
-        });
-        
-        console.log(`[Storage] Command created, sending request...`);
-        
-        // Wrap in Promise.race to ensure timeout works even if AbortController doesn't
-        const sendPromise = s3Client.send(command, { abortSignal: abortController.signal });
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            console.log(`[Storage] Promise.race timeout triggered after ${downloadTimeout / 1000}s`);
-            abortController.abort();
-            reject(new Error(`S3 request timeout after ${downloadTimeout / 1000}s`));
-          }, downloadTimeout);
-        });
-        
-        const response = await Promise.race([sendPromise, timeoutPromise]);
-        console.log(`[Storage] GetObjectCommand completed, response received`);
-
-        clearTimeout(timeoutId);
-
-        if (!response.Body) {
-          throw new Error('Download returned no data');
-        }
-
-        console.log(`[Storage] Converting stream to buffer...`);
-        // Convert stream to buffer with timeout for reading
-        const chunks: Uint8Array[] = [];
-        const stream = response.Body as any;
-        
-        // Read stream with timeout
-        const readPromise = (async () => {
-          for await (const chunk of stream) {
-            chunks.push(chunk);
-          }
-        })();
-
-        const readTimeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error('Stream read timeout after 30s'));
-          }, 30000);
-        });
-
-        await Promise.race([readPromise, readTimeoutPromise]);
-
-        const buffer = Buffer.concat(chunks);
-        console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
-
-        return buffer;
-      } catch (s3Error) {
-        clearTimeout(timeoutId);
-        
-        if (s3Error instanceof Error && s3Error.name === 'AbortError') {
-          throw new Error(`Download timeout after ${downloadTimeout / 1000}s`);
-        }
-        throw s3Error;
+      if (!response.Body) {
+        throw new Error('Download returned no data');
       }
+
+      console.log(`[Storage] Converting stream to buffer...`);
+      // Convert stream to buffer with timeout for reading
+      const chunks: Uint8Array[] = [];
+      const stream = response.Body as any;
+      
+      // Read stream with timeout
+      const readPromise = (async () => {
+        for await (const chunk of stream) {
+          chunks.push(chunk);
+        }
+      })();
+
+      const readTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Stream read timeout after 30s'));
+        }, 30000);
+      });
+
+      await Promise.race([readPromise, readTimeoutPromise]);
+
+      const buffer = Buffer.concat(chunks);
+      console.log(`[Storage] ✓ File downloaded successfully via S3: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+      return buffer;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+      console.error(`[Storage] S3 download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
 
-      if (lastError.message.includes('timeout') || 
-          lastError.message.includes('NoSuchKey') ||
-          lastError.message.includes('404')) {
-        throw lastError;
+      // If timeout or final attempt, fall through to Supabase SDK fallback
+      if (lastError.message.includes('timeout')) {
+        console.log(`[Storage] S3 timed out, trying Supabase SDK fallback...`);
+        break; // Exit loop to try Supabase SDK
+      }
+
+      if (lastError.message.includes('NoSuchKey') || lastError.message.includes('404')) {
+        throw lastError; // Don't retry for missing files
       }
 
       if (attempt === maxRetries) {
-        throw new Error(`Failed to download file after ${maxRetries} attempts: ${lastError.message}`);
+        console.log(`[Storage] S3 failed after ${maxRetries} attempts, trying Supabase SDK fallback...`);
+        break; // Exit loop to try Supabase SDK
       }
     }
   }
 
-  throw lastError || new Error('Download failed for unknown reason');
+  // Fallback to Supabase SDK
+  console.log(`[Storage] Attempting download via Supabase SDK...`);
+  try {
+    const supabase = getStorageClient();
+    const { data, error } = await supabase.storage
+      .from(UPLOADS_BUCKET)
+      .download(filePath);
+
+    if (error) {
+      throw new Error(`Supabase SDK download failed: ${error.message}`);
+    }
+
+    if (!data) {
+      throw new Error('Supabase SDK download returned no data');
+    }
+
+    const arrayBuffer = await data.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    console.log(`[Storage] ✓ File downloaded successfully via Supabase SDK: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+    
+    return buffer;
+  } catch (supabaseError) {
+    const errorMsg = supabaseError instanceof Error ? supabaseError.message : String(supabaseError);
+    console.error(`[Storage] Supabase SDK fallback also failed:`, errorMsg);
+    throw new Error(`Failed to download file via both S3 and Supabase SDK: ${errorMsg}`);
+  }
 }
 
 /**
