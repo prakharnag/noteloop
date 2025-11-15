@@ -78,55 +78,72 @@ function getStorageClient() {
 
 /**
  * Download file from Supabase Storage as Buffer
- * Uses Supabase SDK with timeout wrapper
+ * Uses public URL with fetch for better reliability on Vercel
  */
 export async function downloadFile(filePath: string, maxRetries: number = 3): Promise<Buffer> {
-  const downloadTimeout = 120000; // 2 minutes timeout for download
+  const downloadTimeout = 60000; // 1 minute timeout for download
+  const supabaseUrl = process.env.SUPABASE_URL;
+
+  if (!supabaseUrl) {
+    throw new Error('Missing SUPABASE_URL');
+  }
 
   console.log(`[Storage] Downloading file from: ${filePath}`);
+
+  // Use public URL - works even without auth and is faster
+  const publicUrl = `${supabaseUrl}/storage/v1/object/public/${UPLOADS_BUCKET}/${filePath}`;
+  console.log(`[Storage] Using public URL: ${publicUrl.substring(0, 100)}...`);
 
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    let abortController: AbortController | null = null;
+    
     try {
       if (attempt > 1) {
         console.log(`[Storage] Retry attempt ${attempt}/${maxRetries} for: ${filePath}`);
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 2) * 1000));
       }
 
-      console.log(`[Storage] Getting Supabase client and downloading (attempt ${attempt})...`);
-      const supabase = getStorageClient();
+      console.log(`[Storage] Starting fetch download (attempt ${attempt}) with ${downloadTimeout}ms timeout...`);
+      
+      abortController = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log(`[Storage] Timeout reached, aborting...`);
+        abortController?.abort();
+      }, downloadTimeout);
 
-      // Wrap the download in a timeout
-      const downloadPromise = supabase.storage
-        .from(UPLOADS_BUCKET)
-        .download(filePath);
+      try {
+        const response = await fetch(publicUrl, {
+          signal: abortController.signal,
+        });
 
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`Download timeout after ${downloadTimeout / 1000}s`));
-        }, downloadTimeout);
-      });
+        clearTimeout(timeoutId);
 
-      console.log(`[Storage] Starting download with ${downloadTimeout}ms timeout...`);
-      const { data, error } = await Promise.race([downloadPromise, timeoutPromise]) as any;
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
 
-      if (error) {
-        throw new Error(`Supabase download error: ${error.message}`);
+        console.log(`[Storage] Fetch completed, converting to buffer...`);
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+        return buffer;
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          throw new Error(`Download timeout after ${downloadTimeout / 1000}s`);
+        }
+        throw fetchError;
       }
-
-      if (!data) {
-        throw new Error('Download returned no data');
-      }
-
-      console.log(`[Storage] Converting blob to buffer...`);
-      const arrayBuffer = await data.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
-
-      return buffer;
     } catch (error) {
+      if (abortController) {
+        abortController.abort();
+      }
+
       lastError = error instanceof Error ? error : new Error(String(error));
       console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
 
