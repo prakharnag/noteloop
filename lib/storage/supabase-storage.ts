@@ -1,17 +1,40 @@
 /**
- * Supabase Storage integration
- * Handles file uploads to Supabase Storage buckets
+ * Supabase Storage integration using S3-compatible API
+ * Handles file uploads and downloads from Supabase Storage buckets
  */
 
 import { randomUUID } from 'crypto';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseClient } from '@/lib/db/supabase';
 
 export const UPLOADS_BUCKET = 'uploads';
 
+// S3-compatible client for Supabase Storage
+function getS3Client(): S3Client {
+  const endpoint = process.env.SUPABASE_STORAGE_ENDPOINT;
+  const accessKeyId = process.env.SUPABASE_STORAGE_ACCESS_KEY;
+  const secretAccessKey = process.env.SUPABASE_STORAGE_SECRET_KEY;
+
+  if (!endpoint || !accessKeyId || !secretAccessKey) {
+    throw new Error('Missing S3 credentials. Set SUPABASE_STORAGE_ENDPOINT, SUPABASE_STORAGE_ACCESS_KEY, and SUPABASE_STORAGE_SECRET_KEY');
+  }
+
+  return new S3Client({
+    endpoint,
+    region: 'us-east-1', // Supabase uses us-east-1
+    credentials: {
+      accessKeyId,
+      secretAccessKey,
+    },
+    forcePathStyle: true, // Required for S3-compatible APIs
+  });
+}
+
 /**
- * Upload file to Supabase Storage
- * @param supabase - Authenticated Supabase client
+ * Upload file to Supabase Storage using S3-compatible API
+ * @param supabase - Authenticated Supabase client (for getting public URL)
  * @returns Public URL or signed URL for the uploaded file
  */
 export async function uploadFile(
@@ -27,29 +50,37 @@ export async function uploadFile(
 
   console.log(`[Storage] Uploading file to: ${filePath}`);
 
-  const { data, error } = await supabase.storage
-    .from(UPLOADS_BUCKET)
-    .upload(filePath, file, {
-      contentType: getContentType(fileName),
-      upsert: false,
+  const s3Client = getS3Client();
+  const contentType = getContentType(fileName);
+
+  try {
+    // Use Upload for better handling of large files
+    const upload = new Upload({
+      client: s3Client,
+      params: {
+        Bucket: UPLOADS_BUCKET,
+        Key: filePath,
+        Body: file,
+        ContentType: contentType,
+      },
     });
 
-  if (error) {
+    await upload.done();
+    console.log(`[Storage] File uploaded successfully via S3 API`);
+
+    // Get public URL from Supabase
+    const { data: urlData } = supabase.storage
+      .from(UPLOADS_BUCKET)
+      .getPublicUrl(filePath);
+
+    return {
+      path: filePath,
+      publicUrl: urlData.publicUrl,
+    };
+  } catch (error) {
     console.error('[Storage] Upload error:', error);
-    throw new Error(`Failed to upload file: ${error.message}`);
+    throw new Error(`Failed to upload file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
-
-  // Get public URL
-  const { data: urlData } = supabase.storage
-    .from(UPLOADS_BUCKET)
-    .getPublicUrl(filePath);
-
-  console.log(`[Storage] File uploaded successfully: ${urlData.publicUrl}`);
-
-  return {
-    path: filePath,
-    publicUrl: urlData.publicUrl,
-  };
 }
 
 /**
@@ -77,78 +108,64 @@ function getStorageClient() {
 }
 
 /**
- * Download file from Supabase Storage as Buffer
- * Uses public URL with fetch for better reliability on Vercel
+ * Download file from Supabase Storage as Buffer using S3-compatible API
  */
 export async function downloadFile(filePath: string, maxRetries: number = 3): Promise<Buffer> {
   const downloadTimeout = 60000; // 1 minute timeout for download
-  const supabaseUrl = process.env.SUPABASE_URL;
-
-  if (!supabaseUrl) {
-    throw new Error('Missing SUPABASE_URL');
-  }
 
   console.log(`[Storage] Downloading file from: ${filePath}`);
-
-  // Use public URL - works even without auth and is faster
-  const publicUrl = `${supabaseUrl}/storage/v1/object/public/${UPLOADS_BUCKET}/${filePath}`;
-  console.log(`[Storage] Using public URL: ${publicUrl.substring(0, 100)}...`);
 
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    let abortController: AbortController | null = null;
-    
     try {
       if (attempt > 1) {
         console.log(`[Storage] Retry attempt ${attempt}/${maxRetries} for: ${filePath}`);
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 2) * 1000));
       }
 
-      console.log(`[Storage] Starting fetch download (attempt ${attempt}) with ${downloadTimeout}ms timeout...`);
+      console.log(`[Storage] Starting S3 download (attempt ${attempt})...`);
+      const s3Client = getS3Client();
+
+      // Create a timeout wrapper
+      const downloadPromise = s3Client.send(
+        new GetObjectCommand({
+          Bucket: UPLOADS_BUCKET,
+          Key: filePath,
+        })
+      );
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Download timeout after ${downloadTimeout / 1000}s`));
+        }, downloadTimeout);
+      });
+
+      const response = await Promise.race([downloadPromise, timeoutPromise]);
+
+      if (!response.Body) {
+        throw new Error('Download returned no data');
+      }
+
+      console.log(`[Storage] Converting stream to buffer...`);
+      // Convert stream to buffer
+      const chunks: Uint8Array[] = [];
+      const stream = response.Body as any;
       
-      abortController = new AbortController();
-      const timeoutId = setTimeout(() => {
-        console.log(`[Storage] Timeout reached, aborting...`);
-        abortController?.abort();
-      }, downloadTimeout);
-
-      try {
-        const response = await fetch(publicUrl, {
-          signal: abortController.signal,
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        console.log(`[Storage] Fetch completed, converting to buffer...`);
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-
-        console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
-
-        return buffer;
-      } catch (fetchError) {
-        clearTimeout(timeoutId);
-        
-        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-          throw new Error(`Download timeout after ${downloadTimeout / 1000}s`);
-        }
-        throw fetchError;
+      for await (const chunk of stream) {
+        chunks.push(chunk);
       }
+
+      const buffer = Buffer.concat(chunks);
+      console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+      return buffer;
     } catch (error) {
-      if (abortController) {
-        abortController.abort();
-      }
-
       lastError = error instanceof Error ? error : new Error(String(error));
       console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
 
       if (lastError.message.includes('timeout') || 
-          lastError.message.includes('not found') ||
+          lastError.message.includes('NoSuchKey') ||
           lastError.message.includes('404')) {
         throw lastError;
       }
