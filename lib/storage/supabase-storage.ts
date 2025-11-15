@@ -49,6 +49,7 @@ function getS3Client(): S3Client {
       secretAccessKey,
     },
     forcePathStyle: true, // Required for S3-compatible APIs per Supabase docs
+    // Note: Request timeouts are handled via AbortController in the download function
   });
 }
 
@@ -168,7 +169,18 @@ export async function downloadFile(filePath: string, maxRetries: number = 3): Pr
         });
         
         console.log(`[Storage] Command created, sending request...`);
-        const response = await s3Client.send(command, { abortSignal: abortController.signal });
+        
+        // Wrap in Promise.race to ensure timeout works even if AbortController doesn't
+        const sendPromise = s3Client.send(command, { abortSignal: abortController.signal });
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            console.log(`[Storage] Promise.race timeout triggered after ${downloadTimeout / 1000}s`);
+            abortController.abort();
+            reject(new Error(`S3 request timeout after ${downloadTimeout / 1000}s`));
+          }, downloadTimeout);
+        });
+        
+        const response = await Promise.race([sendPromise, timeoutPromise]);
         console.log(`[Storage] GetObjectCommand completed, response received`);
 
         clearTimeout(timeoutId);
