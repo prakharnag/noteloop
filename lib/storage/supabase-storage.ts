@@ -55,28 +55,82 @@ export async function uploadFile(
 /**
  * Download file from Supabase Storage as Buffer
  * Uses service role client for server-side operations
+ * Includes timeout and retry logic for reliability
  */
-export async function downloadFile(filePath: string): Promise<Buffer> {
+export async function downloadFile(filePath: string, maxRetries: number = 3): Promise<Buffer> {
   const supabase = getSupabaseClient();
+  const downloadTimeout = 120000; // 2 minutes timeout for download
 
   console.log(`[Storage] Downloading file from: ${filePath}`);
 
-  const { data, error } = await supabase.storage
-    .from(UPLOADS_BUCKET)
-    .download(filePath);
+  let lastError: Error | null = null;
 
-  if (error) {
-    console.error('[Storage] Download error:', error);
-    throw new Error(`Failed to download file: ${error.message}`);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 1) {
+        console.log(`[Storage] Retry attempt ${attempt}/${maxRetries} for: ${filePath}`);
+        // Exponential backoff: wait 1s, 2s, 4s
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 2) * 1000));
+      }
+
+      // Race between download and timeout
+      const downloadPromise = supabase.storage
+        .from(UPLOADS_BUCKET)
+        .download(filePath);
+
+      // Create a timeout promise that rejects
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Download timeout after ${downloadTimeout / 1000}s`));
+        }, downloadTimeout);
+      });
+
+      // Race: if timeout rejects first, the whole promise rejects (caught in catch block)
+      // If download completes first, we get the result
+      const result = await Promise.race([downloadPromise, timeoutPromise]);
+      const { data, error } = result;
+
+      if (error) {
+        throw new Error(`Supabase download error: ${error.message}`);
+      }
+
+      if (!data) {
+        throw new Error('Download returned no data');
+      }
+
+      // Convert Blob to Buffer with timeout
+      console.log(`[Storage] Converting blob to buffer...`);
+      const arrayBufferPromise = data.arrayBuffer();
+      const arrayBufferTimeout = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('ArrayBuffer conversion timeout after 30s'));
+        }, 30000);
+      });
+
+      const arrayBuffer = await Promise.race([arrayBufferPromise, arrayBufferTimeout]);
+      const buffer = Buffer.from(arrayBuffer);
+
+      console.log(`[Storage] File downloaded successfully: ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+      return buffer;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.error(`[Storage] Download attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+
+      // Don't retry on timeout or non-retryable errors
+      if (lastError.message.includes('timeout') || lastError.message.includes('not found')) {
+        throw lastError;
+      }
+
+      // If this was the last attempt, throw the error
+      if (attempt === maxRetries) {
+        throw new Error(`Failed to download file after ${maxRetries} attempts: ${lastError.message}`);
+      }
+    }
   }
 
-  // Convert Blob to Buffer
-  const arrayBuffer = await data.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  console.log(`[Storage] File downloaded: ${buffer.length} bytes`);
-
-  return buffer;
+  // This should never be reached, but TypeScript needs it
+  throw lastError || new Error('Download failed for unknown reason');
 }
 
 /**
