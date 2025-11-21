@@ -1,5 +1,7 @@
 **Twin Mind - Second Brain**  
-      
+
+For this assessment I have implemented two modalities - Audio and documents(pdf, .md). Below explanation considers all the requirements and future considerations. 
+
 Architecture  
 Functional Requirements
 
