@@ -99,16 +99,18 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
       }
 
       toast.success('File uploaded successfully!', { id: 'upload' });
-      setUploadStatus({
-        type: 'info',
-        message: `Reading your document...`,
-      });
-
-      setProcessingDocumentId(data.document_id);
 
       // Start polling for processing status
       // Audio files take longer, so we'll poll for up to 10 minutes
       const isAudio = !!file.name.match(/\.(flac|m4a|mp3|mp4|mpeg|mpga|oga|ogg|wav|webm)$/i);
+
+      // Set initial status message based on file type
+      setUploadStatus({
+        type: 'info',
+        message: isAudio ? 'Reading your audio file...' : 'Reading document...',
+      });
+
+      setProcessingDocumentId(data.document_id);
       pollProcessingStatus(data.document_id, isAudio);
 
       // Reset form
@@ -211,35 +213,48 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
         attempts++;
 
         // Update status message based on progress and file type
+        // Each attempt is 2 seconds
         if (isAudio) {
-          if (attempts > 200) {
-            setUploadStatus({
-              type: 'info',
-              message: 'Almost there... Audio transcription takes time.',
-            });
-          } else if (attempts > 100) {
-            setUploadStatus({
-              type: 'info',
-              message: 'Transcribing audio... This may take a few minutes.',
-            });
-          } else if (attempts > 30) {
-            setUploadStatus({
-              type: 'info',
-              message: 'Processing audio file...',
-            });
-          }
-        } else {
-          if (attempts > 100) {
+          if (attempts > 150) {
             setUploadStatus({
               type: 'info',
               message: 'Almost there...',
             });
-          } else if (attempts > 30) {
+          } else if (attempts > 90) {
             setUploadStatus({
               type: 'info',
-              message: 'Making sense of your content...',
+              message: 'Understanding your content...',
+            });
+          } else if (attempts > 45) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Detecting language & translating...',
+            });
+          } else if (attempts > 10) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Transcribing audio...',
             });
           }
+          // Initial "Reading your audio file..." is set before polling starts
+        } else {
+          if (attempts > 75) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Almost there...',
+            });
+          } else if (attempts > 35) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Understanding your content...',
+            });
+          } else if (attempts > 10) {
+            setUploadStatus({
+              type: 'info',
+              message: 'Detecting language & translating...',
+            });
+          }
+          // Initial "Reading document..." is set before polling starts
         }
 
         if (attempts < maxAttempts) {

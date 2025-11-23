@@ -65,8 +65,8 @@ export async function processPDFFromBuffer(
     const text = textPages.join('\n\n');
 
     console.log(`[DocumentProcessor] Extracted text from ${totalPages} pages, total chars: ${text.length}`);
-    console.log(`[DocumentProcessor] First 200 chars: ${text.substring(0, 200)}`);
 
+    // Keep original language - no translation during ingestion
     const metadata = {
       pages: totalPages,
       processor: 'unpdf',
@@ -136,15 +136,16 @@ export async function processMarkdownFromBuffer(
     console.log(`[DocumentProcessor] Processing Markdown buffer: ${filename}`);
 
     const text = buffer.toString('utf-8');
-    const metadata = extractMarkdownMetadata(text);
+    const frontmatterMetadata = extractMarkdownMetadata(text);
 
+    // Keep original language - no translation during ingestion
     return {
       text,
       metadata: {
         processor: 'markdown',
         filename,
         char_count: text.length,
-        ...metadata,
+        ...frontmatterMetadata,
       },
     };
   } catch (error) {
