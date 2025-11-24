@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { FileText, Mic, FileCode, Trash2, Loader2, RefreshCw, Library, Check } from 'lucide-react';
+import { FileText, Mic, FileCode, Trash2, Loader2, RefreshCw, Library, Check, Pencil, X } from 'lucide-react';
 import { useDocumentSelection } from './contexts/DocumentSelectionContext';
 
 interface DocumentManagerProps {
@@ -26,7 +26,65 @@ export function DocumentManager({ userId, refreshTrigger, onDocumentsLoaded }: D
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [saving, setSaving] = useState(false);
   const { selectedDocuments, addDocument, removeDocument, isSelected } = useDocumentSelection();
+
+  const handleStartEditTitle = (e: React.MouseEvent, docId: string, currentTitle: string) => {
+    e.stopPropagation();
+    setEditingDocId(docId);
+    setEditTitle(currentTitle);
+  };
+
+  const handleCancelEditTitle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingDocId(null);
+    setEditTitle('');
+  };
+
+  const handleSaveTitle = async (e: React.MouseEvent, docId: string) => {
+    e.stopPropagation();
+    if (!editTitle.trim() || saving) return;
+
+    try {
+      setSaving(true);
+      const response = await fetch(`/api/documents/${docId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ title: editTitle.trim() }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to update title');
+      }
+
+      // Update local state
+      setDocuments(prev =>
+        prev.map(doc =>
+          doc.id === docId ? { ...doc, title: editTitle.trim() } : doc
+        )
+      );
+
+      // Update document titles for parent
+      onDocumentsLoaded?.(documents.map(doc =>
+        doc.id === docId ? editTitle.trim() : doc.title
+      ));
+
+      toast.success('Title updated successfully');
+      setEditingDocId(null);
+      setEditTitle('');
+    } catch (error) {
+      toast.error('Failed to update title', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleSelectDocument = (doc: Document) => {
     if (isSelected(doc.id)) {
@@ -262,9 +320,56 @@ export function DocumentManager({ userId, refreshTrigger, onDocumentsLoaded }: D
                       )}
                     </div>
                     <div className="flex-1 min-w-0 overflow-hidden">
-                      <h3 className="font-semibold text-sm sm:text-base text-[hsl(214.3,25%,25%)] truncate mb-1">
-                        {doc.title}
-                      </h3>
+                      {editingDocId === doc.id ? (
+                        <div className="flex items-center gap-2 mb-1" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="text"
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            className="flex-1 px-2 py-1 text-sm sm:text-base font-semibold bg-white border border-[hsl(214.3,25%,75%)] rounded focus:ring-2 focus:ring-[hsl(214.3,28%,75%)] focus:border-transparent text-[hsl(214.3,25%,25%)]"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                handleSaveTitle(e as unknown as React.MouseEvent, doc.id);
+                              } else if (e.key === 'Escape') {
+                                handleCancelEditTitle(e as unknown as React.MouseEvent);
+                              }
+                            }}
+                            autoFocus
+                          />
+                          <button
+                            onClick={(e) => handleSaveTitle(e, doc.id)}
+                            disabled={!editTitle.trim() || saving}
+                            className="p-1 text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-50"
+                            title="Save"
+                          >
+                            {saving ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Check className="w-4 h-4" />
+                            )}
+                          </button>
+                          <button
+                            onClick={handleCancelEditTitle}
+                            className="p-1 text-[hsl(0,45%,50%)] hover:bg-[hsl(0,45%,95%)] rounded transition-colors"
+                            title="Cancel"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 mb-1 group/title">
+                          <h3 className="font-semibold text-sm sm:text-base text-[hsl(214.3,25%,25%)] truncate">
+                            {doc.title}
+                          </h3>
+                          <button
+                            onClick={(e) => handleStartEditTitle(e, doc.id, doc.title)}
+                            className="opacity-0 group-hover/title:opacity-100 p-1 text-[hsl(214.3,20%,45%)] hover:bg-[hsl(214.3,25%,85%)] rounded transition-all shrink-0"
+                            title="Edit title"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
                       <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-2">
                         <span className={`text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full ${config.bgColor} ${config.textColor} border ${config.borderColor} shrink-0`}>
                           {config.label}

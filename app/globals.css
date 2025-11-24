@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 :root {
   /* Warm, subtle color scheme */
@@ -82,4 +83,18 @@ html {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--neutral-400);
+}
+
+/* Force all prose content to be black */
+.prose,
+.prose * {
+  color: black !important;
+}
+
+.prose code {
+  background-color: hsl(214.3, 25%, 94%);
+}
+
+.prose pre {
+  background-color: hsl(214.3, 25%, 94%);
 }

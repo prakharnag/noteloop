@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
     const supabaseForDocList = getSupabaseClient();
     const { data: userDocList } = await supabaseForDocList
       .from('documents')
-      .select('title, source_type, created_at, tags')
+      .select('id, title, source_type, created_at, tags')
       .eq('user_id', userId)
       .contains('tags', ['completed'])
       .order('created_at', { ascending: false });
@@ -85,6 +85,16 @@ export async function POST(request: NextRequest) {
       ? userDocList.map((doc, i) => `${i + 1}. "${doc.title}" (${doc.source_type})`).join('\n')
       : 'No documents uploaded yet.';
     console.log(`[Query API] User has ${userDocList?.length || 0} documents`);
+
+    // Create a map of document_id to current document info (source of truth for titles)
+    const documentInfoMap = new Map<string, { title: string; source_type: string; created_at: string }>();
+    userDocList?.forEach(doc => {
+      documentInfoMap.set(doc.id, {
+        title: doc.title,
+        source_type: doc.source_type,
+        created_at: doc.created_at
+      });
+    });
 
     // Step 0: Dual-language search for maximum accuracy
     // Generate embeddings for both original query AND translated version
@@ -592,10 +602,15 @@ Keep it brief (2-3 sentences max).`;
       .filter((c): c is NonNullable<typeof c> => c !== null);
 
     // Build context with document attribution for better source tracking
+    // Use Postgres titles (source of truth) with fallback to Pinecone metadata
     const context = contextChunks.map((c) => {
-      const title = (c.metadata?.title as string) || 'Unknown Document';
-      const sourceType = (c.metadata?.source_type as string) || 'unknown';
-      const createdAtRaw = c.metadata?.created_at as string | undefined;
+      const docId = c.metadata?.document_id as string;
+      const docInfo = documentInfoMap.get(docId);
+
+      // Use Postgres data if available, otherwise fall back to Pinecone metadata
+      const title = docInfo?.title || (c.metadata?.title as string) || 'Unknown Document';
+      const sourceType = docInfo?.source_type || (c.metadata?.source_type as string) || 'unknown';
+      const createdAtRaw = docInfo?.created_at || (c.metadata?.created_at as string);
       const createdAt = createdAtRaw
         ? new Date(createdAtRaw).toLocaleDateString('en-US', {
             year: 'numeric',
@@ -649,6 +664,26 @@ Keep it brief (2-3 sentences max).`;
     const hasDocumentFilter = filters?.document_id || (filters?.document_ids && filters.document_ids.length > 0);
     const selectedDocCount = filters?.document_id ? 1 : (filters?.document_ids?.length || 0);
 
+    // Build selected documents text for the prompt
+    let selectedDocumentsText = '';
+    if (hasDocumentFilter) {
+      const selectedIds = filters?.document_id
+        ? [filters.document_id]
+        : (filters?.document_ids || []);
+
+      const selectedDocs = selectedIds
+        .map((id: string) => {
+          const docInfo = documentInfoMap.get(id);
+          return docInfo ? `"${docInfo.title}" (${docInfo.source_type})` : null;
+        })
+        .filter((doc: string | null): doc is string => doc !== null);
+
+      if (selectedDocs.length > 0) {
+        selectedDocumentsText = selectedDocs.map((doc: string, i: number) => `${i + 1}. ${doc}`).join('\n');
+        console.log(`[Query API] Selected documents for prompt: ${selectedDocs.join(', ')}`);
+      }
+    }
+
     const systemPrompt = `You are a helpful AI assistant for a personal knowledge base containing audio files (meetings, songs), PDFs, and markdown documents.
 
 <rules>
@@ -676,6 +711,14 @@ ${hasDocumentFilter ? `- IMPORTANT: The user has specifically selected ${selecte
 This is the AUTHORITATIVE list of documents in the user's library. Use this list to answer any questions about what documents they have, how many files, etc. Ignore any conflicting information from <memory>.
 ${documentListText}
 </user_documents>
+${selectedDocumentsText ? `
+<selected_documents>
+The user has SELECTED these specific documents for this query. When they say "these docs", "the documents", or similar phrases, they are referring ONLY to these selected documents:
+${selectedDocumentsText}
+
+IMPORTANT: Base your answer ONLY on content from these selected documents. Do not include information from other documents in the library.
+</selected_documents>
+` : ''}
 
 Context format: [Source: "title" | Type: type | Date: date]
 
@@ -703,14 +746,20 @@ ${aiMemoryContext ? `<memory>${aiMemoryContext}</memory>` : ''}`;
     }));
 
     // Step 8: Format sources
-    const sources = contextChunks.map((chunk) => ({
-      document_id: chunk.metadata?.document_id as string,
-      title: chunk.metadata?.title as string,
-      source_type: chunk.metadata?.source_type as string,
-      relevance_score: chunk.score,
-      excerpt: chunk.text.substring(0, 200) + (chunk.text.length > 200 ? '...' : ''),
-      created_at: chunk.metadata?.created_at as string,
-    }));
+    // Use Postgres titles (source of truth) with fallback to Pinecone metadata
+    const sources = contextChunks.map((chunk) => {
+      const docId = chunk.metadata?.document_id as string;
+      const docInfo = documentInfoMap.get(docId);
+
+      return {
+        document_id: docId,
+        title: docInfo?.title || (chunk.metadata?.title as string),
+        source_type: docInfo?.source_type || (chunk.metadata?.source_type as string),
+        relevance_score: chunk.score,
+        excerpt: chunk.text.substring(0, 200) + (chunk.text.length > 200 ? '...' : ''),
+        created_at: docInfo?.created_at || (chunk.metadata?.created_at as string),
+      };
+    });
 
     // Create streaming response
     const stream = await getOpenAIClient().chat.completions.create({

@@ -2,7 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Send, Loader2, Sparkles } from 'lucide-react';
+import { Send, Loader2, Sparkles, Copy, Check, Pencil, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { DocumentChip } from './chat/DocumentChip';
 import { useDocumentSelection } from './contexts/DocumentSelectionContext';
 
@@ -35,10 +36,169 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(true);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
+  const editInputRef = useRef<HTMLTextAreaElement>(null);
   const { selectedDocuments, removeDocument } = useDocumentSelection();
+
+  const handleCopyMessage = async (messageId: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMessageId(messageId);
+      setTimeout(() => setCopiedMessageId(null), 2000);
+    } catch (error) {
+      toast.error('Failed to copy message');
+    }
+  };
+
+  const handleStartEdit = (messageId: string, content: string) => {
+    setEditingMessageId(messageId);
+    setEditContent(content);
+    // Focus the textarea after render
+    setTimeout(() => editInputRef.current?.focus(), 0);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setEditContent('');
+  };
+
+  const handleSaveEdit = async (messageId: string) => {
+    if (!editContent.trim() || loading) return;
+
+    // Find the index of the message being edited
+    const messageIndex = messages.findIndex(msg => msg.id === messageId);
+    if (messageIndex === -1) return;
+
+    // Remove all messages after this one (including the assistant response)
+    const updatedMessages = messages.slice(0, messageIndex);
+
+    // Update the edited message
+    const editedMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: editContent.trim(),
+      timestamp: new Date(),
+    };
+
+    setMessages([...updatedMessages, editedMessage]);
+    setEditingMessageId(null);
+    setEditContent('');
+    setLoading(true);
+
+    // Force scroll to bottom
+    shouldAutoScrollRef.current = true;
+    setTimeout(() => scrollToBottom(true), 100);
+
+    // Create placeholder for assistant message
+    const assistantMessageId = (Date.now() + 1).toString();
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+    };
+
+    setMessages(prev => [...prev, assistantMessage]);
+
+    try {
+      // Build filters with document selection
+      const filters: Record<string, unknown> = {
+        topK: 5,
+      };
+
+      if (selectedDocuments.length > 0) {
+        if (selectedDocuments.length === 1) {
+          filters.document_id = selectedDocuments[0].id;
+        } else {
+          filters.document_ids = selectedDocuments.map(d => d.id);
+        }
+      }
+
+      const response = await fetch('/api/query', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          query: editContent.trim(),
+          conversation_id: conversationId,
+          filters,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server responded with ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error('No response stream available');
+      }
+
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.type === 'metadata') {
+                if (!conversationId && data.conversation_id) {
+                  setConversationId(data.conversation_id);
+                }
+              } else if (data.type === 'token') {
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, content: msg.content + data.content }
+                      : msg
+                  )
+                );
+              } else if (data.type === 'error') {
+                throw new Error(data.error);
+              }
+            } catch (parseError) {
+              // Silently handle parse errors
+            }
+          }
+        }
+      }
+    } catch (error) {
+      toast.error('Unable to process your question', {
+        description: 'Please try again in a moment.',
+      });
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? {
+                ...msg,
+                content: "I'm sorry, I encountered an issue processing your question. Please try asking again.",
+              }
+            : msg
+        )
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const isNearBottom = () => {
     const container = messagesContainerRef.current;
@@ -340,20 +500,89 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
                 message.role === 'user' ? 'justify-end' : 'justify-start'
               }`}
             >
-              <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                  message.role === 'user'
-                    ? 'bg-[hsl(214.3,28%,75%)] text-[hsl(214.3,25%,25%)] shadow-md'
-                    : 'bg-white text-[hsl(214.3,25%,25%)] shadow-sm border border-[hsl(214.3,25%,88%)]'
-                }`}
-              >
-                <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+              <div className={`group relative max-w-[80%] ${message.role === 'user' ? 'flex items-start gap-1' : ''}`}>
+                {/* Action buttons for user messages */}
+                {message.role === 'user' && editingMessageId !== message.id && (
+                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity self-center">
+                    <button
+                      onClick={() => handleStartEdit(message.id, message.content)}
+                      className="p-1.5 rounded-lg hover:bg-[hsl(214.3,25%,85%)] text-[hsl(214.3,20%,45%)]"
+                      title="Edit message"
+                      disabled={loading}
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleCopyMessage(message.id, message.content)}
+                      className="p-1.5 rounded-lg hover:bg-[hsl(214.3,25%,85%)] text-[hsl(214.3,20%,45%)]"
+                      title="Copy message"
+                    >
+                      {copiedMessageId === message.id ? (
+                        <Check className="w-4 h-4 text-green-600" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                )}
+                {/* Edit mode UI */}
+                {message.role === 'user' && editingMessageId === message.id ? (
+                  <div className="w-full min-w-[300px]">
+                    <textarea
+                      ref={editInputRef}
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      className="w-full px-4 py-3 bg-[hsl(214.3,25%,97%)] border border-[hsl(214.3,25%,88%)] rounded-xl focus:ring-2 focus:ring-[hsl(214.3,28%,75%)] focus:border-transparent text-[hsl(214.3,25%,25%)] resize-none"
+                      rows={3}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSaveEdit(message.id);
+                        } else if (e.key === 'Escape') {
+                          handleCancelEdit();
+                        }
+                      }}
+                    />
+                    <div className="flex justify-end gap-2 mt-2">
+                      <button
+                        onClick={handleCancelEdit}
+                        className="px-3 py-1.5 text-sm text-[hsl(214.3,20%,35%)] hover:bg-[hsl(214.3,25%,94%)] rounded-lg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => handleSaveEdit(message.id)}
+                        disabled={!editContent.trim() || loading}
+                        className="px-3 py-1.5 text-sm bg-[hsl(214.3,28%,75%)] hover:bg-[hsl(214.3,30%,65%)] text-[hsl(214.3,25%,25%)] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                      >
+                        <Send className="w-3 h-3" />
+                        Send
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className={`rounded-2xl px-4 py-3 ${
+                      message.role === 'user'
+                        ? 'bg-[hsl(214.3,28%,75%)] text-[hsl(214.3,25%,25%)] shadow-md'
+                        : 'bg-white text-[hsl(214.3,25%,25%)] shadow-sm border border-[hsl(214.3,25%,88%)]'
+                    }`}
+                  >
+                    {message.role === 'assistant' ? (
+                      <div className="prose prose-sm max-w-none prose-headings:font-semibold prose-headings:mt-3 prose-headings:mb-2 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-a:no-underline">
+                        <ReactMarkdown>{message.content}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                    )}
 
-                <p className={`text-xs mt-2 ${
-                  message.role === 'user' ? 'text-[hsl(214.3,20%,35%)]' : 'text-[hsl(214.3,15%,45%)]'
-                }`}>
-                  {message.timestamp.toLocaleTimeString()}
-                </p>
+                    <p className={`text-xs mt-2 ${
+                      message.role === 'user' ? 'text-[hsl(214.3,20%,35%)]' : 'text-[hsl(214.3,15%,45%)]'
+                    }`}>
+                      {message.timestamp.toLocaleTimeString()}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           ))

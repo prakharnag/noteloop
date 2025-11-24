@@ -1,6 +1,7 @@
 /**
  * API endpoint for individual document operations
  * DELETE /api/documents/:id - Delete a document and all associated data
+ * PATCH /api/documents/:id - Update document metadata (e.g., title)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -118,6 +119,80 @@ export async function DELETE(
     return NextResponse.json(
       {
         error: 'Failed to delete document',
+        details: error instanceof Error ? error.message : 'Unknown error',
+      },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id: documentId } = await params;
+
+    if (!documentId) {
+      return NextResponse.json(
+        { error: 'document_id is required' },
+        { status: 400 }
+      );
+    }
+
+    const body = await request.json();
+    const { title } = body;
+
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      return NextResponse.json(
+        { error: 'title is required and must be a non-empty string' },
+        { status: 400 }
+      );
+    }
+
+    console.log(`[Documents API] Updating document ${documentId} title to: ${title}`);
+
+    const supabase = getSupabaseClient();
+
+    // Check if document exists
+    const { data: existingDoc, error: checkError } = await supabase
+      .from('documents')
+      .select('id')
+      .eq('id', documentId)
+      .single();
+
+    if (checkError || !existingDoc) {
+      return NextResponse.json(
+        { error: 'Document not found' },
+        { status: 404 }
+      );
+    }
+
+    // Update the document title
+    const { data: updatedDoc, error: updateError } = await supabase
+      .from('documents')
+      .update({ title: title.trim() })
+      .eq('id', documentId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('[Documents API] Error updating document:', updateError);
+      throw new Error(`Failed to update document: ${updateError.message}`);
+    }
+
+    console.log(`[Documents API] Successfully updated document ${documentId}`);
+
+    return NextResponse.json({
+      success: true,
+      document: updatedDoc,
+    });
+
+  } catch (error) {
+    console.error('[Documents API] Error:', error);
+    return NextResponse.json(
+      {
+        error: 'Failed to update document',
         details: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 500 }
