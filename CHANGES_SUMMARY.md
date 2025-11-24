@@ -46,7 +46,36 @@ Full multilingual support for document processing and querying, enabling users t
 
 ---
 
-## 2. Chat Message Actions (Copy & Edit)
+## 2. Enhanced Temporal Query Support
+
+### Overview
+Improved time-based querying with better date display and AI temporal awareness.
+
+### Improvements Made
+
+**Better Date Display in Context:**
+- Documents now show formatted dates in AI context
+- Format: `[Source: "Meeting Notes" | Type: audio | Date: Nov 24, 2024]`
+- Clear date attribution for accurate temporal responses
+
+**Enhanced AI Temporal Awareness:**
+- System prompt includes date information for each source
+- AI can accurately reference when content was created
+- Supports natural language temporal queries
+
+**Existing Capabilities (Already Supported):**
+- Date range filtering (`created_at_gte`, `created_at_lte`)
+- Timestamps in Postgres and Pinecone metadata
+- Historical retrieval and time-based filtering
+
+**Example Queries:**
+- "What did I discuss in my recent meeting?"
+- "Summarize the documents from this week"
+- "What was I working on last month?"
+
+---
+
+## 3. Chat Message Actions (Copy & Edit)
 
 ### 1.1 Copy Button for User Messages
 **File:** `components/ChatInterface.tsx`
