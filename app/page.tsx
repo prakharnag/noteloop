@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/auth/supabase-client';
 import { useState } from 'react';
-import { Sparkles, FileText, Mic, MessageSquare, ArrowRight, Loader2 } from 'lucide-react';
+import { Sparkles, FileText, Mic, MessageSquare, ArrowRight, Loader2, Globe } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function LandingPage() {
@@ -63,7 +63,7 @@ export default function LandingPage() {
         </div>
 
         {/* Features */}
-        <div className="grid md:grid-cols-3 gap-8 mb-16">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8 mb-16">
           <div className="group text-center">
             <div className="w-14 h-14 rounded-xl bg-primary flex items-center justify-center mb-4 mx-auto group-hover:bg-primary-hover transition-colors">
               <FileText className="w-7 h-7 text-white" />
@@ -97,6 +97,18 @@ export default function LandingPage() {
             </h3>
             <p className="text-neutral-500">
               Ask questions and get instant answers from your personal knowledge base
+            </p>
+          </div>
+
+          <div className="group text-center">
+            <div className="w-14 h-14 rounded-xl bg-accent flex items-center justify-center mb-4 mx-auto group-hover:bg-accent-hover transition-colors">
+              <Globe className="w-7 h-7 text-white" />
+            </div>
+            <h3 className="text-xl font-bold mb-3 text-foreground">
+              Multilingual Support
+            </h3>
+            <p className="text-neutral-500">
+              Upload and query in any language with automatic translation and cross-language search
             </p>
           </div>
         </div>

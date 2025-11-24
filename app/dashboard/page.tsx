@@ -5,6 +5,7 @@ import { UploadSection } from '@/components/UploadSection';
 import { ChatInterface } from '@/components/ChatInterface';
 import { DocumentManager } from '@/components/DocumentManager';
 import { ConversationSidebar } from '@/components/ConversationSidebar';
+import { DocumentSelectionProvider } from '@/components/contexts/DocumentSelectionContext';
 import { createClient } from '@/lib/auth/supabase-client';
 import { useRouter } from 'next/navigation';
 import { Menu, X } from 'lucide-react';
@@ -16,6 +17,7 @@ export default function AppPage() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [existingDocTitles, setExistingDocTitles] = useState<string[]>([]);
   const router = useRouter();
   const supabase = createClient();
 
@@ -45,6 +47,10 @@ export default function AppPage() {
     setRefreshTrigger(prev => prev + 1);
   };
 
+  const handleDocumentsLoaded = (titles: string[]) => {
+    setExistingDocTitles(titles);
+  };
+
   const handleConversationSelect = (conversationId: string) => {
     setCurrentConversationId(conversationId);
     setSidebarOpen(false); // Close sidebar on mobile after selection
@@ -64,6 +70,7 @@ export default function AppPage() {
   }
 
   return (
+    <DocumentSelectionProvider>
     <div className="min-h-screen bg-[hsl(214.3,31.8%,91.4%)] flex">
       {/* Mobile Sidebar Overlay */}
       {sidebarOpen && (
@@ -143,7 +150,7 @@ export default function AppPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
             {/* Upload Section */}
             <div className="lg:col-span-1">
-              <UploadSection userId={userId} onUploadComplete={handleUploadComplete} />
+              <UploadSection userId={userId} onUploadComplete={handleUploadComplete} existingDocTitles={existingDocTitles} />
             </div>
 
             {/* Chat Section */}
@@ -158,10 +165,11 @@ export default function AppPage() {
 
           {/* Document Library */}
           <div className="mt-6">
-            <DocumentManager userId={userId} refreshTrigger={refreshTrigger} />
+            <DocumentManager userId={userId} refreshTrigger={refreshTrigger} onDocumentsLoaded={handleDocumentsLoaded} />
           </div>
         </div>
       </div>
     </div>
+    </DocumentSelectionProvider>
   );
 }

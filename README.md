@@ -222,16 +222,6 @@ See `lib/db/schema.sql` for the complete schema. Key tables:
 | `PINECONE_API_KEY` | Pinecone API key | `pcsk_...` |
 | `PINECONE_INDEX_NAME` | Pinecone index name | `second-brain` |
 
-## Deployment
-
-### Vercel (Recommended)
-
-1. Push your code to GitHub
-2. Import project in Vercel
-3. Add environment variables in Vercel dashboard
-4. Deploy
-
-**Note**: For production, increase `maxDuration` in API routes (requires Vercel Pro for >10s)
 
 ## Troubleshooting
 

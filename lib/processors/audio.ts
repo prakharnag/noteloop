@@ -66,11 +66,17 @@ export async function processAudio(
     
     // Call OpenAI Whisper API for transcription with timeout
     // Large audio files can take a long time, so we set a reasonable timeout
+    // Add prompts to improve accuracy for different languages
+    const transcriptionPrompt = options.prompt ||
+      'Transcribe accurately. This may contain Hindi, English, or mixed language content. ' +
+      'For Hindi: preserve exact words like गाना, प्यार, दिल, जिंदगी, ख्वाब, हसीन. ' +
+      'For songs: preserve poetic phrases and lyrics exactly as spoken.';
+
     const transcriptionPromise = getOpenAIClient().audio.transcriptions.create({
       file: audioFile,
       model: 'whisper-1',
-      language: options.language,
-      prompt: options.prompt,
+      language: options.language, // Let Whisper auto-detect if not specified
+      prompt: transcriptionPrompt,
       temperature: options.temperature ?? 0,
       response_format: 'verbose_json', // Get detailed response with timestamps
     });
@@ -83,14 +89,16 @@ export async function processAudio(
     const transcription = await Promise.race([transcriptionPromise, timeoutPromise]) as any;
 
     console.log(
-      `[AudioProcessor] Transcription completed. Duration: ${transcription.duration}s`
+      `[AudioProcessor] Transcription completed. Duration: ${transcription.duration}s, Language: ${transcription.language}`
     );
 
-    // Extract text and metadata
+    // Keep original language - no translation during ingestion
+    // Translation happens at query time for cross-language search
     const text = transcription.text;
+
     const metadata = {
       duration: transcription.duration,
-      language: transcription.language,
+      language: transcription.language, // Store detected language for query-time translation
       processor: 'whisper-1',
       segments: transcription.segments?.length || 0,
       // Store segments for potential future use (temporal chunking)
@@ -102,7 +110,7 @@ export async function processAudio(
     };
 
     return {
-      text,
+      text, // Original language preserved
       metadata,
     };
   } catch (error) {
@@ -145,7 +153,9 @@ export async function processAudioFromBuffer(
       response_format: 'verbose_json',
     });
 
+    // Keep original language - no translation during ingestion
     const text = transcription.text;
+
     const metadata = {
       duration: transcription.duration,
       language: transcription.language,
