@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Send, Loader2, Sparkles } from 'lucide-react';
+import { DocumentChip } from './chat/DocumentChip';
+import { useDocumentSelection } from './contexts/DocumentSelectionContext';
 
 interface ChatInterfaceProps {
   userId: string;
@@ -36,6 +38,7 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
+  const { selectedDocuments, removeDocument } = useDocumentSelection();
 
   const isNearBottom = () => {
     const container = messagesContainerRef.current;
@@ -184,6 +187,19 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
     setMessages((prev) => [...prev, assistantMessage]);
 
     try {
+      // Build filters with document selection
+      const filters: Record<string, unknown> = {
+        topK: 5,
+      };
+
+      if (selectedDocuments.length > 0) {
+        if (selectedDocuments.length === 1) {
+          filters.document_id = selectedDocuments[0].id;
+        } else {
+          filters.document_ids = selectedDocuments.map(d => d.id);
+        }
+      }
+
       const response = await fetch('/api/query', {
         method: 'POST',
         headers: {
@@ -193,9 +209,7 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
           user_id: userId,
           query: currentQuery,
           conversation_id: conversationId,
-          filters: {
-            topK: 5,
-          },
+          filters,
         }),
       });
 
@@ -361,12 +375,29 @@ export function ChatInterface({ userId, conversationId: propConversationId, onCo
 
       {/* Input */}
       <div className="p-4 bg-white border-t border-[hsl(214.3,25%,88%)]">
+        {/* Document Chips */}
+        {selectedDocuments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {selectedDocuments.map((doc) => (
+              <DocumentChip
+                key={doc.id}
+                document={doc}
+                onRemove={() => removeDocument(doc.id)}
+              />
+            ))}
+          </div>
+        )}
+        {selectedDocuments.length === 0 && (
+          <p className="text-xs text-[hsl(214.3,15%,60%)] mb-2">
+            Searching all documents
+          </p>
+        )}
         <form onSubmit={handleSubmit} className="flex gap-2">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask a question..."
+            placeholder={selectedDocuments.length > 0 ? `Ask about ${selectedDocuments.length} selected document${selectedDocuments.length > 1 ? 's' : ''}...` : "Ask a question..."}
             disabled={loading || conversationLoading}
             className="flex-1 px-4 py-3 bg-[hsl(214.3,25%,97%)] border border-[hsl(214.3,25%,88%)] rounded-xl focus:ring-2 focus:ring-[hsl(214.3,28%,75%)] focus:border-transparent text-[hsl(214.3,25%,25%)] placeholder:text-[hsl(214.3,15%,60%)] disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           />

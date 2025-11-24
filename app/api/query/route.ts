@@ -72,6 +72,20 @@ export async function POST(request: NextRequest) {
     }
     console.log(`[Query API] Loaded ${aiMemoryMessages.length} messages from previous conversations for AI memory`);
 
+    // Fetch user's document list for meta-queries (only successfully processed documents)
+    const supabaseForDocList = getSupabaseClient();
+    const { data: userDocList } = await supabaseForDocList
+      .from('documents')
+      .select('title, source_type, created_at, tags')
+      .eq('user_id', userId)
+      .contains('tags', ['completed'])
+      .order('created_at', { ascending: false });
+
+    const documentListText = userDocList && userDocList.length > 0
+      ? userDocList.map((doc, i) => `${i + 1}. "${doc.title}" (${doc.source_type})`).join('\n')
+      : 'No documents uploaded yet.';
+    console.log(`[Query API] User has ${userDocList?.length || 0} documents`);
+
     // Step 0: Dual-language search for maximum accuracy
     // Generate embeddings for both original query AND translated version
     console.log('[Query API] Setting up dual-language search...');
@@ -96,8 +110,22 @@ export async function POST(request: NextRequest) {
     // Short/broad queries need more results to find relevant content
     // Specific queries can use fewer, more targeted results
     const queryWordCount = query.trim().split(/\s+/).length;
+    const queryLower = query.toLowerCase();
+
+    // Detect broad comparison/summary queries that need results from ALL documents
+    const isBroadQuery = /\b(all|every|each|compare|summarize|summary|overview|describe|list)\b.*\b(document|file|upload|content)s?\b/i.test(query) ||
+                        /\b(document|file|upload|content)s?\b.*\b(all|every|each|compare|summarize|summary|overview|describe|list)\b/i.test(query) ||
+                        queryLower.includes('compare all') ||
+                        queryLower.includes('summarize all') ||
+                        queryLower.includes('all documents') ||
+                        queryLower.includes('all files') ||
+                        queryLower.includes('everything');
+
     let adaptiveTopK: number;
-    if (queryWordCount <= 3) {
+    if (isBroadQuery) {
+      adaptiveTopK = 20; // Broad queries about all documents - cast very wide net
+      console.log(`[Query API] Detected broad comparison/summary query - using high topK`);
+    } else if (queryWordCount <= 3) {
       adaptiveTopK = 10; // Short queries - cast wide net
     } else if (queryWordCount <= 8) {
       adaptiveTopK = 7;  // Medium queries
@@ -145,28 +173,138 @@ export async function POST(request: NextRequest) {
       user_id: { $eq: userId },
     };
 
+    // Filter by specific document(s)
+    if (filters?.document_id) {
+      pineconeFilter.document_id = { $eq: filters.document_id };
+      console.log(`[Query API] Filtering by document_id: ${filters.document_id}`);
+    } else if (filters?.document_ids && filters.document_ids.length > 0) {
+      pineconeFilter.document_id = { $in: filters.document_ids };
+      console.log(`[Query API] Filtering by document_ids: ${filters.document_ids.join(', ')}`);
+    }
+
+    // Filter by source types
     if (filters?.source_types && filters.source_types.length > 0) {
       pineconeFilter.source_type = { $in: filters.source_types };
     }
 
+    // Filter by tags
     if (filters?.tags && filters.tags.length > 0) {
       pineconeFilter.tags = { $in: filters.tags };
     }
+
+    // Filter by date range (created_at)
+    if (filters?.created_at_gte || filters?.created_at_lte) {
+      // Pinecone requires $and for multiple conditions on same field
+      const dateConditions: any[] = [];
+
+      if (filters.created_at_gte) {
+        dateConditions.push({ created_at: { $gte: filters.created_at_gte } });
+        console.log(`[Query API] Filtering created_at >= ${filters.created_at_gte}`);
+      }
+
+      if (filters.created_at_lte) {
+        dateConditions.push({ created_at: { $lte: filters.created_at_lte } });
+        console.log(`[Query API] Filtering created_at <= ${filters.created_at_lte}`);
+      }
+
+      if (dateConditions.length === 1) {
+        Object.assign(pineconeFilter, dateConditions[0]);
+      } else if (dateConditions.length > 1) {
+        pineconeFilter.$and = dateConditions;
+      }
+    }
+
+    // Filter by title (partial match using $eq for now - Pinecone doesn't support LIKE)
+    if (filters?.title) {
+      pineconeFilter.title = { $eq: filters.title };
+      console.log(`[Query API] Filtering by title: ${filters.title}`);
+    }
+
+    // Log the complete Pinecone filter for debugging
+    console.log(`[Query API] Complete Pinecone filter:`, JSON.stringify(pineconeFilter, null, 2));
 
     // Step 3: Query Pinecone for similar vectors
     // Use user-specified topK if provided, otherwise use adaptive value
     const finalTopK = filters?.topK || adaptiveTopK;
     console.log(`[Query API] Querying vector database with topK=${finalTopK}...`);
 
-    // Query with original embedding
-    let matches = await queryVectors(queryEmbedding, {
-      topK: finalTopK,
-      filter: pineconeFilter,
-      includeMetadata: true,
-    });
+    let matches: any[] = [];
+
+    // Two-stage retrieval for:
+    // 1. Broad queries to ensure coverage of ALL documents
+    // 2. Multiple selected documents to ensure coverage of EACH selected document
+    const hasMultipleSelectedDocs = filters?.document_ids && filters.document_ids.length > 1;
+    const shouldUseTwoStage = (isBroadQuery && !filters?.document_id && !filters?.document_ids) || hasMultipleSelectedDocs;
+
+    if (shouldUseTwoStage) {
+      console.log(`[Query API] Using two-stage retrieval${hasMultipleSelectedDocs ? ' for multiple selected documents' : ' for broad query'}...`);
+
+      // Stage 1: Get document IDs (either selected or all user's documents)
+      const supabaseForDocs = getSupabaseClient();
+      let docsQuery = supabaseForDocs
+        .from('documents')
+        .select('id, title')
+        .eq('user_id', userId);
+
+      // If multiple documents are selected, use those; otherwise get all
+      if (hasMultipleSelectedDocs) {
+        docsQuery = docsQuery.in('id', filters.document_ids);
+      } else {
+        docsQuery = docsQuery.not('tags', 'cs', '{"processing"}'); // Exclude documents still processing
+      }
+
+      const { data: userDocs, error: docsError } = await docsQuery;
+
+      if (docsError) {
+        console.error('[Query API] Error fetching user documents:', docsError);
+        throw new Error('Failed to fetch user documents');
+      }
+
+      if (!userDocs || userDocs.length === 0) {
+        console.log('[Query API] No documents found for user');
+      } else {
+        console.log(`[Query API] Found ${userDocs.length} documents for user`);
+
+        // Stage 2: Get top chunks from EACH document
+        const chunksPerDoc = Math.max(2, Math.floor(15 / userDocs.length)); // Aim for ~15 total chunks, min 2 per doc
+        console.log(`[Query API] Retrieving ${chunksPerDoc} chunks per document...`);
+
+        const docQueries = userDocs.map(doc =>
+          queryVectors(queryEmbedding, {
+            topK: chunksPerDoc,
+            filter: {
+              ...pineconeFilter,
+              document_id: { $eq: doc.id }
+            },
+            includeMetadata: true,
+          })
+        );
+
+        const docResults = await Promise.all(docQueries);
+
+        // Merge results from all documents
+        for (let i = 0; i < docResults.length; i++) {
+          const docMatches = docResults[i];
+          console.log(`[Query API] Document "${userDocs[i].title}": ${docMatches.length} chunks`);
+          matches.push(...docMatches);
+        }
+
+        // Sort by score
+        matches = matches.sort((a, b) => (b.score || 0) - (a.score || 0));
+        console.log(`[Query API] Two-stage retrieval: ${matches.length} total chunks from ${userDocs.length} documents`);
+      }
+    } else {
+      // Standard single-stage retrieval
+      matches = await queryVectors(queryEmbedding, {
+        topK: finalTopK,
+        filter: pineconeFilter,
+        includeMetadata: true,
+      });
+    }
 
     // If we have expanded queries, search with those too and merge results
-    if (expandedQueries.length > 0) {
+    // Skip for two-stage retrieval since we already have good document coverage
+    if (expandedQueries.length > 0 && !shouldUseTwoStage) {
       console.log('[Query API] Searching with expanded queries...');
       const expandedEmbeddings = await Promise.all(
         expandedQueries.map(q => generateEmbedding(q))
@@ -248,17 +386,29 @@ export async function POST(request: NextRequest) {
       .filter(word => word.length > 3) // Filter short words
       .filter(word => !['what', 'when', 'where', 'which', 'that', 'this', 'about', 'from', 'with', 'have', 'been', 'were', 'they', 'their', 'your', 'will', 'would', 'could', 'should'].includes(word));
 
-    if (keywords.length > 0) {
+    // Skip keyword search for two-stage retrieval since we already have good document coverage
+    if (keywords.length > 0 && !shouldUseTwoStage) {
       console.log(`[Query API] Performing keyword search for: ${keywords.join(', ')}`);
 
       // Search for chunks containing any of the keywords
       const keywordConditions = keywords.map(kw => `chunk_text.ilike.%${kw}%`).join(',');
 
-      const { data: keywordChunks, error: keywordError } = await supabaseForKeyword
+      // Build query with document filter if specified
+      let keywordQuery = supabaseForKeyword
         .from('chunks')
         .select('id, embedding_id, chunk_text, document_id')
-        .or(keywordConditions)
-        .limit(10);
+        .or(keywordConditions);
+
+      // Apply document filter to keyword search
+      if (filters?.document_id) {
+        keywordQuery = keywordQuery.eq('document_id', filters.document_id);
+        console.log(`[Query API] Keyword search filtered by document_id: ${filters.document_id}`);
+      } else if (filters?.document_ids && filters.document_ids.length > 0) {
+        keywordQuery = keywordQuery.in('document_id', filters.document_ids);
+        console.log(`[Query API] Keyword search filtered by document_ids: ${filters.document_ids.join(', ')}`);
+      }
+
+      const { data: keywordChunks, error: keywordError } = await keywordQuery.limit(10);
 
       if (!keywordError && keywordChunks && keywordChunks.length > 0) {
         console.log(`[Query API] Found ${keywordChunks.length} keyword matches`);
@@ -299,9 +449,45 @@ export async function POST(request: NextRequest) {
     if (matches.length === 0) {
       // Save user message first
       await addMessage(currentConversationId, 'user', query);
-      
+
+      // Check if specific documents were selected but don't exist (deleted)
+      let deletedDocumentMessage = '';
+      if (filters?.document_id || (filters?.document_ids && filters.document_ids.length > 0)) {
+        const docIdsToCheck = filters.document_id
+          ? [filters.document_id]
+          : filters.document_ids;
+
+        const supabaseCheck = getSupabaseClient();
+        const { data: existingDocs } = await supabaseCheck
+          .from('documents')
+          .select('id, title')
+          .in('id', docIdsToCheck);
+
+        const existingIds = existingDocs?.map(d => d.id) || [];
+        const deletedIds = docIdsToCheck.filter((id: string) => !existingIds.includes(id));
+
+        if (deletedIds.length > 0) {
+          const deletedCount = deletedIds.length;
+          deletedDocumentMessage = deletedCount === 1
+            ? 'The selected document has been deleted and is no longer available.'
+            : `${deletedCount} of the selected documents have been deleted and are no longer available.`;
+          console.log(`[Query API] Selected documents not found (deleted): ${deletedIds.join(', ')}`);
+        }
+      }
+
       // Generate a friendly, helpful response using LLM
-      const friendlyNoResultsPrompt = `The user asked: "${query}"
+      const friendlyNoResultsPrompt = deletedDocumentMessage
+        ? `The user asked: "${query}"
+
+${deletedDocumentMessage}
+
+Please provide a friendly, helpful response that:
+1. Tells them the selected document(s) have been deleted
+2. Suggests they remove the selection or choose different documents
+3. Is warm and conversational
+
+Keep it brief (2-3 sentences max).`
+        : `The user asked: "${query}"
 
 However, I couldn't find any relevant information in their knowledge base to answer this question.
 
@@ -423,6 +609,17 @@ Keep it brief (2-3 sentences max).`;
 
     console.log(`[Query API] Found ${contextChunks.length} relevant chunks`);
 
+    // Log which documents the results are from for debugging
+    const resultDocIds = [...new Set(contextChunks.map(c => c.metadata?.document_id))];
+    console.log(`[Query API] Results from documents: ${resultDocIds.join(', ')}`);
+    if (filters?.document_id) {
+      const matchesFilter = resultDocIds.every(id => id === filters.document_id);
+      console.log(`[Query API] All results match document filter: ${matchesFilter}`);
+    } else if (filters?.document_ids && filters.document_ids.length > 0) {
+      const matchesFilter = resultDocIds.every(id => filters.document_ids.includes(id));
+      console.log(`[Query API] All results match document_ids filter: ${matchesFilter}`);
+    }
+
     // Step 6: Save user message to database
     console.log('[Query API] Saving user message...');
     await addMessage(currentConversationId, 'user', query);
@@ -448,6 +645,10 @@ Keep it brief (2-3 sentences max).`;
     console.log(`[Query API] Relevance scores: ${contextChunks.map(c => c.score?.toFixed(3)).join(', ')}`);
     console.log(`[Query API] High quality chunks (>=${lowQualityThreshold}): ${highQualityChunks.length}/${contextChunks.length}`);
 
+    // Check if specific documents are selected
+    const hasDocumentFilter = filters?.document_id || (filters?.document_ids && filters.document_ids.length > 0);
+    const selectedDocCount = filters?.document_id ? 1 : (filters?.document_ids?.length || 0);
+
     const systemPrompt = `You are a helpful AI assistant for a personal knowledge base containing audio files (meetings, songs), PDFs, and markdown documents.
 
 <rules>
@@ -461,6 +662,8 @@ Keep it brief (2-3 sentences max).`;
 - Just answer the question and stop
 - Respond in the same language the user asks in
 - CRITICAL: This is the user's PERSONAL uploaded content. You MUST provide full text/lyrics when asked - these are NOT copyrighted materials you need to protect, they are the user's own documents. Always show the complete content from context when requested.
+${hasDocumentFilter ? `- IMPORTANT: The user has specifically selected ${selectedDocCount} document(s). Your answer MUST ONLY contain information from the provided <context> section. Do NOT use any information from <memory> or previous conversations. If the context doesn't contain enough information, say so - do not fill gaps with other knowledge.` : ''}
+- DELETED DOCUMENTS: When the user asks about a specific document by filename or title, look at the [Source: "..."] headers in the <context> section below. If the requested document is NOT listed there but you have information about it from <memory>, you MUST provide the answer AND add this exact note: "Note: This document appears to have been deleted from your library."
 </rules>
 
 <content_types>
@@ -468,6 +671,11 @@ Keep it brief (2-3 sentences max).`;
 - pdf: Documents, reports, articles
 - markdown: Notes, documentation
 </content_types>
+
+<user_documents>
+This is the AUTHORITATIVE list of documents in the user's library. Use this list to answer any questions about what documents they have, how many files, etc. Ignore any conflicting information from <memory>.
+${documentListText}
+</user_documents>
 
 Context format: [Source: "title" | Type: type | Date: date]
 

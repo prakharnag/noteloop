@@ -5,6 +5,7 @@ import { UploadSection } from '@/components/UploadSection';
 import { ChatInterface } from '@/components/ChatInterface';
 import { DocumentManager } from '@/components/DocumentManager';
 import { ConversationSidebar } from '@/components/ConversationSidebar';
+import { DocumentSelectionProvider } from '@/components/contexts/DocumentSelectionContext';
 import { createClient } from '@/lib/auth/supabase-client';
 import { useRouter } from 'next/navigation';
 import { Menu, X } from 'lucide-react';
@@ -64,6 +65,7 @@ export default function AppPage() {
   }
 
   return (
+    <DocumentSelectionProvider>
     <div className="min-h-screen bg-[hsl(214.3,31.8%,91.4%)] flex">
       {/* Mobile Sidebar Overlay */}
       {sidebarOpen && (
@@ -163,5 +165,6 @@ export default function AppPage() {
         </div>
       </div>
     </div>
+    </DocumentSelectionProvider>
   );
 }

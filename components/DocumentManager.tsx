@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { FileText, Mic, FileCode, Trash2, Loader2, RefreshCw, Library } from 'lucide-react';
+import { FileText, Mic, FileCode, Trash2, Loader2, RefreshCw, Library, Check } from 'lucide-react';
+import { useDocumentSelection } from './contexts/DocumentSelectionContext';
 
 interface DocumentManagerProps {
   userId: string;
@@ -24,6 +25,28 @@ export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const { selectedDocuments, addDocument, removeDocument, isSelected } = useDocumentSelection();
+
+  const handleSelectDocument = (doc: Document) => {
+    if (isSelected(doc.id)) {
+      removeDocument(doc.id);
+    } else {
+      if (selectedDocuments.length >= 5) {
+        toast.error('Maximum 5 documents can be selected', {
+          description: 'Remove a document to select another',
+        });
+        return;
+      }
+      addDocument({
+        id: doc.id,
+        title: doc.title,
+        type: doc.source_type,
+      });
+      toast.success(`Added "${doc.title}" to context`, {
+        duration: 2000,
+      });
+    }
+  };
 
   const loadDocuments = async () => {
     try {
@@ -82,6 +105,11 @@ export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps
 
       // Remove from local state
       setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
+
+      // Remove from selected documents if it was selected
+      if (isSelected(documentId)) {
+        removeDocument(documentId);
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
@@ -201,16 +229,25 @@ export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps
           {documents.map((doc) => {
             const config = getSourceTypeConfig(doc.source_type);
             const Icon = config.icon;
+            const selected = isSelected(doc.id);
 
             return (
               <div
                 key={doc.id}
-                className={`group p-3 sm:p-4 rounded-xl border ${config.borderColor} ${config.bgColor} hover:shadow-lg transition-all overflow-hidden`}
+                onClick={() => handleSelectDocument(doc)}
+                className={`group p-3 sm:p-4 rounded-xl border ${config.borderColor} ${config.bgColor} hover:shadow-lg transition-all overflow-hidden cursor-pointer ${
+                  selected ? 'ring-2 ring-[hsl(214.3,28%,65%)] ring-offset-2' : ''
+                }`}
               >
                 <div className="flex items-start justify-between gap-2 sm:gap-4">
                   <div className="flex items-start gap-2 sm:gap-3 flex-1 min-w-0 overflow-hidden">
-                    <div className={`p-1.5 sm:p-2 rounded-lg ${config.color} shrink-0`}>
+                    <div className={`relative p-1.5 sm:p-2 rounded-lg ${config.color} shrink-0`}>
                       <Icon className="w-4 h-4 sm:w-5 sm:h-5 text-[hsl(214.3,25%,25%)]" />
+                      {selected && (
+                        <div className="absolute -top-1 -right-1 w-4 h-4 bg-[hsl(214.3,28%,65%)] rounded-full flex items-center justify-center">
+                          <Check className="w-2.5 h-2.5 text-white" />
+                        </div>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0 overflow-hidden">
                       <h3 className="font-semibold text-sm sm:text-base text-[hsl(214.3,25%,25%)] truncate mb-1">
@@ -239,7 +276,10 @@ export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps
 
                   {/* Delete Button */}
                   <button
-                    onClick={() => handleDelete(doc.id, doc.title)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(doc.id, doc.title);
+                    }}
                     disabled={deleting === doc.id}
                     className="shrink-0 p-1.5 sm:p-2 text-[hsl(0,45%,50%)] hover:bg-[hsl(0,45%,95%)] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Delete document"
