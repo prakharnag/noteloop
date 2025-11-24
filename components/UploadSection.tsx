@@ -7,9 +7,10 @@ import { Upload, FileText, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 interface UploadSectionProps {
   userId: string;
   onUploadComplete?: () => void;
+  existingDocTitles?: string[];
 }
 
-export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) {
+export function UploadSection({ userId, onUploadComplete, existingDocTitles = [] }: UploadSectionProps) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{
@@ -33,12 +34,23 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
       return;
     }
 
+    // Check for duplicate file
+    if (existingDocTitles.includes(file.name)) {
+      toast.error('Duplicate file', {
+        description: `A file named "${file.name}" already exists. Please rename the file or delete the existing one first.`,
+      });
+      return;
+    }
+
     const formData = new FormData();
     formData.append('file', file);
     formData.append('user_id', userId);
 
     setUploading(true);
     setUploadStatus(null);
+
+    // Dismiss any previous toasts to avoid stale error messages
+    toast.dismiss();
 
     try {
       toast.loading('Uploading file...', { id: 'upload' });
@@ -84,12 +96,18 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
           type: 'error',
           message: toastDescription,
         });
-        
+
+        // Reset file selection on error
+        setFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+
         // Reset button after 5 seconds
         setTimeout(() => {
           setUploadStatus(null);
         }, 5000);
-        
+
         return;
       }
 
@@ -130,7 +148,13 @@ export function UploadSection({ userId, onUploadComplete }: UploadSectionProps) 
         type: 'error',
         message: 'An unexpected error occurred. Please try again.',
       });
-      
+
+      // Reset file selection on error
+      setFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
       // Reset button after 5 seconds
       setTimeout(() => {
         setUploadStatus(null);

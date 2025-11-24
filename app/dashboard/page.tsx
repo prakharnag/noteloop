@@ -17,6 +17,7 @@ export default function AppPage() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [existingDocTitles, setExistingDocTitles] = useState<string[]>([]);
   const router = useRouter();
   const supabase = createClient();
 
@@ -44,6 +45,10 @@ export default function AppPage() {
   const handleUploadComplete = () => {
     // Trigger document library refresh
     setRefreshTrigger(prev => prev + 1);
+  };
+
+  const handleDocumentsLoaded = (titles: string[]) => {
+    setExistingDocTitles(titles);
   };
 
   const handleConversationSelect = (conversationId: string) => {
@@ -145,7 +150,7 @@ export default function AppPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
             {/* Upload Section */}
             <div className="lg:col-span-1">
-              <UploadSection userId={userId} onUploadComplete={handleUploadComplete} />
+              <UploadSection userId={userId} onUploadComplete={handleUploadComplete} existingDocTitles={existingDocTitles} />
             </div>
 
             {/* Chat Section */}
@@ -160,7 +165,7 @@ export default function AppPage() {
 
           {/* Document Library */}
           <div className="mt-6">
-            <DocumentManager userId={userId} refreshTrigger={refreshTrigger} />
+            <DocumentManager userId={userId} refreshTrigger={refreshTrigger} onDocumentsLoaded={handleDocumentsLoaded} />
           </div>
         </div>
       </div>

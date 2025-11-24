@@ -8,6 +8,7 @@ import { useDocumentSelection } from './contexts/DocumentSelectionContext';
 interface DocumentManagerProps {
   userId: string;
   refreshTrigger?: number;
+  onDocumentsLoaded?: (titles: string[]) => void;
 }
 
 interface Document {
@@ -21,7 +22,7 @@ interface Document {
   chunk_count: number;
 }
 
-export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps) {
+export function DocumentManager({ userId, refreshTrigger, onDocumentsLoaded }: DocumentManagerProps) {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -60,6 +61,8 @@ export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps
 
       const data = await response.json();
       setDocuments(data.documents);
+      // Report loaded document titles to parent
+      onDocumentsLoaded?.(data.documents.map((doc: Document) => doc.title));
     } catch (error) {
       toast.error('Failed to load documents', {
         description: error instanceof Error ? error.message : 'Unknown error',
@@ -82,12 +85,21 @@ export function DocumentManager({ userId, refreshTrigger }: DocumentManagerProps
 
   const handleDelete = async (documentId: string, title: string) => {
     // Show confirmation toast
-    const confirmed = window.confirm(
-      `Are you sure you want to delete "${title}"? This will remove all associated data and cannot be undone.`
-    );
+    toast(`Delete "${title}"?`, {
+      description: 'This will remove all associated data and cannot be undone.',
+      action: {
+        label: 'Delete',
+        onClick: () => performDelete(documentId, title),
+      },
+      cancel: {
+        label: 'Cancel',
+        onClick: () => {},
+      },
+      duration: 10000,
+    });
+  };
 
-    if (!confirmed) return;
-
+  const performDelete = async (documentId: string, title: string) => {
     try {
       setDeleting(documentId);
       toast.loading('Deleting document...', { id: `delete-${documentId}` });
